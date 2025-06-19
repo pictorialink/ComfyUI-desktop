@@ -1,0 +1,47 @@
+name: Build - All Platforms
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '.prettierrc'
+      - '.eslintrc.json'
+      - '.prettierignore'
+      - 'README.md'
+      - '.husky/**'
+      - '.vscode/**'
+      - 'scripts/**'
+      - '.gitignore'
+      - 'todesktop.json'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.cursor/**'
+      - '.claude/**'
+      - 'CLAUDE.md'
+      - '*_example'
+      - 'tests/unit/**'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.prettierrc'
+      - '.eslintrc.json'
+      - '.prettierignore'
+      - 'README.md'
+      - '.husky/**'
+      - '.vscode/**'
+      - 'scripts/**'
+      - '.gitignore'
+      - 'todesktop.json'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.cursor/**'
+      - '.claude/**'
+      - 'CLAUDE.md'
+      - '*_example'
+      - 'tests/unit/**'
+
+jobs:
+  build-and-test-e2e-windows:
+    secrets: inherit
+    uses: ./.github/workflows/integration_test_windows.yml
+  build-apple-debug-all:
+    secrets: inherit
+    uses: ./.github/workflows/debug_macos.yml

@@ -1,0 +1,98 @@
+name: Build to ToDesktop
+description: Will build the project then send the project files to ToDesktop to be compiled into installers.
+
+inputs:
+  GITHUB_TOKEN:
+    description: 'GitHub Token'
+    required: true
+  TODESKTOP_EMAIL:
+    description: 'ToDesktop Email'
+    required: true
+  TODESKTOP_ACCESS_TOKEN:
+    description: 'ToDesktop Access Token'
+    required: true
+  STAGING:
+    description: 'Build Staging'
+    default: 'false'
+    required: false
+  RELEASE_TAG:
+    description: 'Release Tag'
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js 20.x
+      uses: JP250552/setup-node@0c618ceb2e48275dc06e86901822fd966ce75ba2
+      with:
+        node-version: '20.x'
+        corepack: true
+
+    - run: yarn install --immutable
+      shell: bash
+
+    - run: yarn set version --yarn-path self
+      shell: bash
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install ComfyUI and create standalone package
+      shell: bash
+      run: |
+        set -x
+        yarn make:assets
+        yarn clean:assets:git
+
+    - name: Make app
+      shell: bash
+      env:
+        PUBLISH: true
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        TODESKTOP_EMAIL: ${{ inputs.TODESKTOP_EMAIL }}
+        TODESKTOP_ACCESS_TOKEN: ${{ inputs.TODESKTOP_ACCESS_TOKEN }}
+      run: |
+        if [ "${{ inputs.STAGING }}" = "true" ]; then
+          echo "🚧 Building STAGING version..."
+          yarn run publish:staging
+        else
+          echo "🚀 Building PRODUCTION version..."
+          yarn run publish | tee build.log
+          
+          # Extract build ID from the log
+          BUILD_URL=$(grep "Build complete!" build.log | head -n1 | cut -d' ' -f3)
+          BUILD_ID=$(echo $BUILD_URL | cut -d'/' -f6)
+          APP_ID=$(echo $BUILD_URL | cut -d'/' -f5)
+          
+          # Only update release notes if RELEASE_TAG is provided
+          if [ -n "${{ inputs.RELEASE_TAG }}" ]; then
+            # Create download links section
+            DOWNLOAD_LINKS="
+        ### Download Latest:
+        Mac (Apple Silicon): https://download.comfy.org/mac/dmg/arm64
+        Windows: https://download.comfy.org/windows/nsis/x64
+
+        <details>
+
+        <summary>
+
+        ### Artifacts of current release
+
+        </summary>
+
+        Mac (Apple Silicon): https://download.comfy.org/${BUILD_ID}/mac/dmg/arm64
+        Windows: https://download.comfy.org/${BUILD_ID}/windows/nsis/x64
+
+        </details>"
+            
+            # First get existing release notes
+            EXISTING_NOTES=$(gh release view ${{ inputs.RELEASE_TAG }} --json body -q .body)
+            
+            # Combine existing notes with download links
+            UPDATED_NOTES="${EXISTING_NOTES}${DOWNLOAD_LINKS}"
+            
+            # Update the release with combined notes
+            gh release edit ${{ inputs.RELEASE_TAG }} --notes "$UPDATED_NOTES"
+          fi
+        fi
