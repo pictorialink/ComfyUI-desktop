@@ -21,6 +21,7 @@ import { DevOverrides } from './main-process/devOverrides';
 import SentryLogging from './services/sentry';
 import { type HasTelemetry, type ITelemetry, getTelemetry, promptMetricsConsent } from './services/telemetry';
 import { DesktopConfig } from './store/desktopConfig';
+import { installCustomNodes } from './utils/customNodesInstaller';
 
 export class DesktopApp implements HasTelemetry {
   readonly telemetry: ITelemetry = getTelemetry();
@@ -109,6 +110,10 @@ export class DesktopApp implements HasTelemetry {
           return;
         }
       }
+
+      await installCustomNodes?.((str:any)=>appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str)).catch((error: Error) => {
+        log.error('Error during custom nodes installation:', error);
+      });
       appWindow.sendServerStartProgress(ProgressStatus.READY);
       await appWindow.loadComfyUI(serverArgs);
 
