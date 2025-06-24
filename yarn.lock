@@ -243,6 +243,7 @@ __metadata:
     "@types/eslint__js": "npm:^8.42.3"
     "@types/lodash": "npm:4.17.15"
     "@types/node": "npm:^22.10.2"
+    "@types/progress": "npm:^2.0.7"
     "@types/tar": "npm:6.1.13"
     "@types/tmp": "npm:^0.2.6"
     "@types/wait-on": "npm:^5.3.4"
@@ -3029,6 +3030,15 @@ __metadata:
     "@types/node": "npm:*"
     xmlbuilder: "npm:>=11.0.1"
   checksum: 10c0/2a929f4482e3bea8c3288a46ae589a2ae2d01df5b7841ead7032d7baa79d79af6c875a5798c90705eea9306c2fb1544d7ed12ab3c905c5626d5dd5dc9f464b94
+  languageName: node
+  linkType: hard
+
+"@types/progress@npm:^2.0.7":
+  version: 2.0.7
+  resolution: "@types/progress@npm:2.0.7"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/1e387b59a3a19562e49b9ac43db8fb78d2d3ad9168fa54585a9455f9bb530e43a6a69c30dfb44a6fdd10e4bc7a2fb431d71d514f1bc191c2e1c76d3e0314df74
   languageName: node
   linkType: hard
 

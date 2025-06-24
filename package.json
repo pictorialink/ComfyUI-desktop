@@ -70,6 +70,7 @@
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/eslint__js": "^8.42.3",
     "@types/node": "^22.10.2",
+    "@types/progress": "^2.0.7",
     "@types/tar": "6.1.13",
     "@types/tmp": "^0.2.6",
     "@types/wait-on": "^5.3.4",
