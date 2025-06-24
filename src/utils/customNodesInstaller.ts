@@ -105,11 +105,8 @@ async function installStart(node: CustomNode, customNodesDir: string, comfyDir: 
         console.log(`Clone command: ${cloneCmd}`);
 
         try {
-          await sleep(10000); // 等待10秒
           console.log(`Cloning ${node.name} from ${node.repository} to ${nodeDir}...`);
-          await sleep(10000); // 等待10秒
           await commandRun(cloneCmd,logger);
-          await sleep(10000); // 等待10秒
           if (node.version) {
             cloneCmd = `git -C ${nodeDir} checkout ${node.version}`;
             await commandRun(cloneCmd,logger);
@@ -179,11 +176,11 @@ async function installNodeRequirements(node: CustomNode, nodeDir: string, comfyD
       // await execAsync(`${pythonPath} -m pip install -r "${requirementsPath}"`, {
       //   stdio: 'inherit'
       // } as any);
-      commandRun(`${pythonPath} -m pip install -r ${requirementsPath}`,logger);
+      await commandRun(`${pythonPath} -m pip install -r ${requirementsPath}`,logger);
 
     } catch (error) {
       log.info('Trying with system Python...');
-      commandRun(`python -m pip install -r ${requirementsPath}`,logger);
+      await commandRun(`python -m pip install -r ${requirementsPath}`,logger);
     }
   }
 }
