@@ -8,8 +8,6 @@ import ProgressBar from 'progress';
 import stream from 'stream';
 import { promisify } from 'util';
 
-import { stringify } from './../../node_modules/postcss/lib/postcss.d';
-
 const pipeline = promisify(stream.pipeline);
 
 interface DownloadOptions {
@@ -94,7 +92,6 @@ export class HuggingFaceDownloader {
 
     try {
       // 获取文件下载URL
-      //   const fileUrl = `https://huggingface.co/${repoId}/resolve/main/${remotePath}`;
       let fileUrl: any = this.options.url;
       if (!isSingleFile(fileUrl)) {
         fileUrl = `https://huggingface.co/${repoId}/resolve/main/${remotePath}`;
@@ -219,6 +216,9 @@ function isSingleFile(path: string): boolean {
     '.json',
     '.yaml',
     '.yml',
+    '.txt',
+    '.sft',
+    '.safetensors.index.json',
   ];
   return fileExtensions.some((ext) => path.toLowerCase().endsWith(ext));
 }
