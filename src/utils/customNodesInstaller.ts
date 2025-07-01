@@ -42,14 +42,7 @@ export async function installCustomNodes(logger:any): Promise<void> {
     const defaultNodes = getDefaultNodes();
     // 检查是否有用户自定义的节点配置
     // const userConfigPath = path.join(app.getPath('userData'), 'custom-nodes.json');
-    // log.info('3333333333333333333userConfigPath:', userConfigPath);
-    // if (fs.existsSync(userConfigPath)) {
-    //   try {
-    //     userNodes = JSON.parse(fs.readFileSync(userConfigPath, 'utf-8'));
-    //   } catch (error) {
-    //     log.error('Failed to parse user custom nodes config:', error);
-    //   }
-    // }
+
     let userNodes: CustomNode[] = [];
     const nodesToInstall = [...defaultNodes, ...userNodes];
     for (const node of nodesToInstall) {
@@ -237,20 +230,6 @@ function getDefaultNodes(): CustomNode[] {
       ]
     },
     {
-      name: 'ComfyUI-Florence2',
-      repository: 'https://github.com/pictorialink/ComfyUI-Florence2.git',
-      version: '27714bad54f2c81180392bbcfa56e39c1ad1b991',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-Florence2',
-      models: [
-        {
-          url: 'https://huggingface.co/microsoft/Florence-2-large',
-          path: 'models/LLM/Florence-2-large',
-          repoid:"microsoft/Florence-2-large"
-        },
-      ]
-    },
-    {
       name: 'ComfyUI_MiniCPM-V-2_6-int4',
       repository: 'https://github.com/pictorialink/ComfyUI-MiniCPM-V-2_6-int4.git',
       version: 'ed210d86d48a58712356e8ad0fac255eead94206',
@@ -298,6 +277,20 @@ function getDefaultNodes(): CustomNode[] {
           url: 'https://huggingface.co/hr16/DWPose-TorchScript-BatchSize5/resolve/main/dw-ll_ucoco_384_bs5.torchscript.pt',
           path: 'custom_nodes/ComfyUI-controlnet_aux/ckpts/hr16/DWPose-TorchScript-BatchSize5/dw-ll_ucoco_384_bs5.torchscript.pt',
           repoid:"hr16/DWPose-TorchScript-BatchSize5"
+        },
+      ]
+    },
+    {
+      name: 'ComfyUI-Florence2',
+      repository: 'https://github.com/pictorialink/ComfyUI-Florence2.git',
+      version: '27714bad54f2c81180392bbcfa56e39c1ad1b991',
+      type: 'Community',
+      install_path: 'custom_nodes/ComfyUI-Florence2',
+      models: [
+        {
+          url: 'https://huggingface.co/microsoft/Florence-2-large',
+          path: 'models/LLM/Florence-2-large',
+          repoid:"microsoft/Florence-2-large"
         },
       ]
     },
