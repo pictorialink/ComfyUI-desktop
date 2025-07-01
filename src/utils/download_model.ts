@@ -88,7 +88,7 @@ export class HuggingFaceDownloader {
     const { repoId, outputDir, resume } = this.options;
     const localPath = path.join(outputDir, remotePath);
     const tempPath = `${localPath}.tmp`;
-    console.log(`⬇️ 开6789始下载: ${remotePath} 到 ${localPath}`);
+    console.log(`⬇️ 开始下载: ${remotePath} 到 ${localPath}`);
 
     try {
       // 获取文件下载URL
