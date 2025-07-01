@@ -158,7 +158,7 @@ export class HuggingFaceDownloader {
     } catch (error) {
       await fsExtra.remove(tempPath).catch(() => {});
       console.error(
-        `❌ 下载失99999败: ${remotePath}--${tempPath}--${localPath}`,
+        `❌ 下载失败: ${remotePath}--${tempPath}--${localPath}`,
         error instanceof Error ? error.message : error
       );
       throw error;
