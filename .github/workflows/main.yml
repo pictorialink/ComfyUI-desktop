@@ -84,7 +84,7 @@ jobs:
     - name: Sign and Notarize DMG
       run: |
         # 重新签名 DMG
-        codesign -f -o runtime -s "${{ secrets.IDENTITY_NAME }}" "${{ env.NEW_DMG_PATH }}"
+        codesign -f -o runtime --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "${{ env.NEW_DMG_PATH }}"
         
         # 提交到公证服务
         echo "Submitting to Apple notarization service..."
