@@ -162,7 +162,7 @@ jobs:
         -d '{
               "msgtype": "text",
               "text": {
-                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}"
+                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}/${{ env.NEW_DMG_NAME }}"
               }
             }'
 
