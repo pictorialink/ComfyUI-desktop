@@ -77,7 +77,8 @@ jobs:
         fi
         
         # 获取应用程序名称
-        APP_NAME=$(echo "$OUTPUT_DIR"/*.app | awk -F 'Release/' '{print $2}' | awk -F .app '{print $1}')
+        # APP_NAME=$(echo "$OUTPUT_DIR"/*.app | awk -F 'Release/' '{print $2}' | awk -F .app '{print $1}')
+        APP_NAME=$(basename "$OUTPUT_DIR"/*.app .app)
 
         # 应用程序大小
         APP_SIZE=$(du -sm $OUTPUT_DIR/*.app | awk '{print $1}')
