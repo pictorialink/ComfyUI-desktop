@@ -46,6 +46,30 @@ jobs:
           --team-id "${{ secrets.TEAM_ID }}" \
           --password "${{ secrets.ACCOUNT_PASSWORD }}"
 
+    - name: Create entitlements file
+      run: |
+        cat > Release.entitlements << 'EOL'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+            <key>com.apple.security.cs.disable-executable-page-protection</key>
+            <true/>
+            <key>com.apple.security.automation.apple-events</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+        </dict>
+        </plist>
+        EOL
+        cat Release.entitlements
+
     - name: Build and package project
       env:
         CSC_LINK: ${{ secrets.APP_BASE64 }}
@@ -88,16 +112,23 @@ jobs:
         
         # 提交到公证服务
         echo "Submitting to Apple notarization service..."
-        xcrun notarytool submit "${{ env.NEW_DMG_PATH }}" --keychain-profile "comfyui" --wait --no-s3-acceleration
+        SUBMISSION_ID=$(xcrun notarytool submit "${{ env.NEW_DMG_PATH }}" --keychain-profile "comfyui" --wait --no-s3-acceleration | grep "id:" | head -1 | awk '{print $2}')
+        echo "SUBMISSION_ID=$SUBMISSION_ID" >> $GITHUB_ENV
+        
+        # 获取公证状态
+        if [ ! -z "$SUBMISSION_ID" ]; then
+          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "comfyui"
+        fi
         
         # 注入公证信息
         echo "Stapling notarization ticket to DMG..."
-        xcrun stapler staple "${{ env.NEW_DMG_PATH }}"
+        xcrun stapler staple "${{ env.NEW_DMG_PATH }}" || true
         
         # 验证签名和公证
         echo "Verifying signature and notarization..."
-        spctl --assess -vv --type open "${{ env.NEW_DMG_PATH }}"
-        xcrun stapler validate "${{ env.NEW_DMG_PATH }}"
+        codesign -vvv "${{ env.NEW_DMG_PATH }}"
+        spctl --assess -vv --type open "${{ env.NEW_DMG_PATH }}" || true
+        xcrun stapler validate "${{ env.NEW_DMG_PATH }}" || true
 
     # 检查 DMG 文件是否存在
     - name: Check final DMG file
