@@ -53,10 +53,11 @@ jobs:
       with:
         p12-file-base64: ${{ secrets.APP_BASE64 }}
         p12-password: ${{ secrets.P12_PASSWORD }}
+        keychain-password: ${{ secrets.KEYCHAIN_PASSWORD || github.run_id }}
     
     - name: Generate keychain profile for notarization
       run: |
-        xcrun notarytool store-credentials 'comfyui' \
+        xcrun notarytool store-credentials "notary-profile" \
           --apple-id "${{ secrets.USER_NAME }}" \
           --team-id "${{ secrets.TEAM_ID }}" \
           --password "${{ secrets.ACCOUNT_PASSWORD }}"
@@ -79,61 +80,93 @@ jobs:
         
         # 确定输出目录
         PROJECT_DIR=$(pwd)
-        # 输出$PROJECT_DIR/dist/下所有目录
         echo "Output directories in $PROJECT_DIR/dist:"
-        ls -d $PROJECT_DIR/dist/*
-        ls -d $PROJECT_DIR/dist/mac-arm64/*
-
-        OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
-
-        # 创建临时目录
-        DMG_DIR="$OUTPUT_DIR/dmg_temp"
-        if [[ -d "$DMG_DIR" ]]; then
-         rm -rf "${DMG_DIR:?}/"*
+        ls -la $PROJECT_DIR/dist/
+        
+        # 检查mac-arm64目录是否存在
+        if [ -d "$PROJECT_DIR/dist/mac-arm64" ]; then
+          OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
+          echo "Using mac-arm64 directory: $OUTPUT_DIR"
         else
-         mkdir -p "$DMG_DIR"
+          # 找到可能的其他目录
+          OUTPUT_DIR=$(find "$PROJECT_DIR/dist" -type d -name "mac*" | head -1)
+          echo "Using alternative directory: $OUTPUT_DIR"
         fi
         
-        # 获取应用程序名称
-        APP_NAME=$(basename "$OUTPUT_DIR"/*.app .app)
-
-        # 应用程序大小
-        APP_SIZE=$(du -sm $OUTPUT_DIR/*.app | awk '{print $1}')
-        echo "App Size: ${APP_SIZE}M"
-
-        # 计算目标大小，APP_SIZE + 20MB 确保有足够空间
-        TARGET_SIZE=$((APP_SIZE + 20))
-
+        # 检查输出目录中的内容
+        echo "Contents of output directory:"
+        ls -la "$OUTPUT_DIR"
+        
+        # 查找.app文件
+        APP_PATH=$(find "$OUTPUT_DIR" -name "*.app" -type d | head -1)
+        if [ -z "$APP_PATH" ]; then
+          echo "No .app file found in output directory!"
+          exit 1
+        fi
+        
+        APP_NAME=$(basename "$APP_PATH" .app)
+        echo "Found app: $APP_NAME"
+        
+        # 创建临时目录
+        DMG_DIR="$OUTPUT_DIR/dmg_temp"
+        mkdir -p "$DMG_DIR"
+        
+        # 应用签名前确认应用路径
+        echo "Signing app at: $APP_PATH"
+        
+        # 确认entitlements文件存在
+        if [ ! -f "./Release.entitlements" ]; then
+          echo "Release.entitlements file not found!"
+          exit 1
+        fi
+        
+        # 应用签名 (--force 确保覆盖任何现有签名)
+        codesign --force --options runtime --entitlements ./Release.entitlements --sign "${{secrets.IDENTITY_NAME}}" "$APP_PATH" --deep --verbose
+        
+        # 检查签名
+        codesign --verify --verbose "$APP_PATH"
+        
         # 确定DMG名称
         DMG_NAME="${APP_NAME}_${TAG}.dmg"
         echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
         
-        # 应用签名
-        codesign -f -o runtime --entitlements ./Release.entitlements -s "${{secrets.IDENTITY_NAME}}" -v "${OUTPUT_DIR}/${APP_NAME}.app" --deep
-        
-        # 生成钥匙串密码凭证
-        xcrun notarytool store-credentials 'pictorial' --apple-id "${{secrets.USER_NAME}}" --team-id "${{secrets.TEAM_ID}}" --password "${{secrets.ACCOUNT_PASSWORD}}"
-        
         # 将应用程序复制到临时目录
-        cp -R "$OUTPUT_DIR/$APP_NAME.app" "$DMG_DIR" || exit 1
-        
-        # 显示剩余磁盘空间
-        df -h
+        cp -R "$APP_PATH" "$DMG_DIR/"
         
         # 确定DMG路径
         DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
         echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
         
-        # 使用更高效的创建方式，一步到位创建只读DMG
+        # 创建DMG (使用更可靠的参数)
         hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG_PATH"
         
         echo "DMG 创建完成: $DMG_PATH"
         
-        # 提交到公证服务
-        xcrun notarytool submit "$DMG_PATH" --keychain-profile "pictorial" --wait --no-s3-acceleration
+        # 验证DMG是否成功创建
+        if [ ! -f "$DMG_PATH" ]; then
+          echo "DMG file was not created successfully!"
+          exit 1
+        fi
+        
+        # 签名DMG
+        codesign --force --sign "${{secrets.IDENTITY_NAME}}" "$DMG_PATH" --verbose
+        
+        # 提交到公证服务并等待结果
+        echo "Submitting for notarization..."
+        xcrun notarytool submit "$DMG_PATH" --keychain-profile "notary-profile" --wait
+        
+        # 等待一点时间让公证服务处理
+        sleep 30
+        
+        # 检查公证状态
+        xcrun notarytool info --keychain-profile "notary-profile" $(xcrun notarytool history --keychain-profile "notary-profile" | grep "$DMG_NAME" | head -1 | awk '{print $1}')
         
         # 注入公证信息
+        echo "Stapling notarization ticket..."
         xcrun stapler staple "$DMG_PATH"
+        
+        # 验证签章
+        xcrun stapler validate "$DMG_PATH"
         
         # 删除临时目录
         rm -rf "$DMG_DIR"
@@ -147,16 +180,23 @@ jobs:
 
         # 显示文件信息
         ls -la "${{ env.DMG_PATH }}"
+        
+        # 检查签名和公证状态
+        echo "Checking DMG signature:"
+        codesign -dv --verbose=4 "${{ env.DMG_PATH }}"
+        
+        echo "Checking DMG staple:"
+        xcrun stapler validate "${{ env.DMG_PATH }}"
 
     # 4. 发布 DMG 到 Release
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: "${{ env.DMG_PATH }}"
-        name: "Auto Release ${{ github.sha }}"
-        body: "DMG package for commit ${{ github.sha }}"
+        name: "ComfyUI Desktop ${{ env.TAG }}"
+        body: "ComfyUI Desktop ${{ env.TAG }} for macOS"
         draft: false
-        prerelease: true  # 标记为预发布
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
     
