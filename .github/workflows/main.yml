@@ -64,6 +64,7 @@ jobs:
         # 输出$PROJECT_DIR/dist/下所有目录
         echo "Output directories in $PROJECT_DIR/dist:"
         ls -d $PROJECT_DIR/dist/*
+        ls -d $PROJECT_DIR/dist/mac-arm64/*
 
         OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
 
