@@ -15,7 +15,7 @@ const debugConfig: Configuration = {
   },
   mac: {
     icon: './assets/UI/Comfy_Logo.icns',
-    target: 'zip',
+    target: 'dmg',
     identity: null,
   },
   linux: {
