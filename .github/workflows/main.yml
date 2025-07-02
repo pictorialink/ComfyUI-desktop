@@ -46,30 +46,6 @@ jobs:
           --team-id "${{ secrets.TEAM_ID }}" \
           --password "${{ secrets.ACCOUNT_PASSWORD }}"
 
-    - name: Create entitlements file
-      run: |
-        cat > Release.entitlements << 'EOL'
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>com.apple.security.cs.allow-jit</key>
-            <true/>
-            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-            <true/>
-            <key>com.apple.security.cs.disable-library-validation</key>
-            <true/>
-            <key>com.apple.security.cs.disable-executable-page-protection</key>
-            <true/>
-            <key>com.apple.security.automation.apple-events</key>
-            <true/>
-            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
-            <true/>
-        </dict>
-        </plist>
-        EOL
-        cat Release.entitlements
-
     - name: Build and package project
       env:
         CSC_LINK: ${{ secrets.APP_BASE64 }}
@@ -82,77 +58,106 @@ jobs:
         echo "Building project with DMG packaging..."
 
         yarn make
+
+        # 确定输出目录
+        PROJECT_DIR=$(pwd)
+        # 输出$PROJECT_DIR/dist/下所有目录
+        echo "Output directories in $PROJECT_DIR/dist:"
+        ls -d $PROJECT_DIR/dist/*
+
+        OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
+
+        # 创建临时目录
+        DMG_DIR="$OUTPUT_DIR/dmg_temp"
+        if [[ -d "$DMG_DIR" ]]; then
+         rm -rf "${DMG_DIR:?}/"*
+        else
+         mkdir -p "$DMG_DIR"
+        fi
         
-        # 获取打包后的 DMG 文件路径
-        DMG_PATH=$(find ./dist -name "*.dmg" -type f | head -n 1)
+        # 获取应用程序名称
+        APP_NAME=$(echo "$OUTPUT_DIR"/*.app | awk -F 'Release/' '{print $2}' | awk -F .app '{print $1}')
+
+        # 应用程序大小
+        APP_SIZE=$(du -sm $OUTPUT_DIR/*.app | awk '{print $1}')
+        echo "App Size: ${APP_SIZE}M"
+
+        # 计算目标大小，APP_SIZE + 5MB
+        TARGET_SIZE=$((APP_SIZE + 5))
+
+        # 确定DMG名称
+        DMG_NAME="${APP_NAME}_${TAG}.dmg"
+        echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
         
-        if [ -z "$DMG_PATH" ]; then
+        # 应用签名
+        codesign -f -o runtime --entitlements ./Release.entitlements -s "${{secrets.IDENTITY_NAME}}" -v "${OUTPUT_DIR}/${APP_NAME}.app" --deep
+        
+        # 生成钥匙串密码凭证
+        xcrun notarytool store-credentials 'pictorial' --apple-id "${{secrets.USER_NAME}}" --team-id "${{secrets.TEAM_ID}}" --password "${{secrets.ACCOUNT_PASSWORD}}"
+        
+        # 将应用程序复制到临时目录
+        cp -R "$OUTPUT_DIR/$APP_NAME.app" "$DMG_DIR" || exit 1
+        
+        # 确定DMG路径
+        DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
+        echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
+        
+        # 创建DMG文件
+        # hdiutil create -volname 'Pictorial' -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG_PATH"
+        # 创建空的DMG文件
+        hdiutil create -size ${TARGET_SIZE}m -fs APFS -volname "$APP_NAME" -srcfolder "$DMG_DIR" -ov -format UDRW "$DMG_PATH"
+
+        # 挂载 DMG
+        MOUNT_POINT="/Volumes/$APP_NAME"
+        hdiutil attach "$DMG_PATH" -mountpoint "$MOUNT_POINT"
+
+        # 创建符号链接
+        ln -s /Applications /Volumes/"$APP_NAME"
+
+        # 卸载 DMG
+        hdiutil detach "$MOUNT_POINT"
+
+        # 转换为只读 DMG
+        hdiutil convert "$DMG_PATH" -format UDZO -o "${DMG_PATH%.dmg}-tmp.dmg"
+
+        # 删除原始可写 DMG
+        rm -rf "$DMG_PATH"
+
+        # 重命名最终 DMG 文件
+        mv "${DMG_PATH%.dmg}-tmp.dmg" "$DMG_PATH"
+        echo "DMG 创建完成: $DMG_PATH"
+        
+        # 提交到公证服务
+        xcrun notarytool submit "$DMG_PATH" --keychain-profile "pictorial" --wait --no-s3-acceleration
+        
+        # 注入公证信息
+        xcrun stapler staple "$DMG_PATH"
+        
+        # 删除临时目录
+        rm -rf "$DMG_DIR"
+    
+    - name: Check DMG file
+      run: |
+        if [ ! -f "${{ env.DMG_PATH }}" ]; then
           echo "DMG file not found"
           exit 1
         fi
-        
-        # 输出 DMG 文件路径和文件名
-        DMG_NAME=$(basename "$DMG_PATH")
-        echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
-        echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
-        
-        echo "DMG file created: $DMG_PATH"
-        
-        # 添加版本号到 DMG 文件名
-        NEW_DMG_NAME="ComfyUI_Desktop_${TAG}.dmg"
-        NEW_DMG_PATH="./dist/${NEW_DMG_NAME}"
-        cp "$DMG_PATH" "$NEW_DMG_PATH"
-        echo "NEW_DMG_PATH=$NEW_DMG_PATH" >> $GITHUB_ENV
-        echo "NEW_DMG_NAME=$NEW_DMG_NAME" >> $GITHUB_ENV
 
-    - name: Sign and Notarize DMG
-      run: |
-        # 重新签名 DMG
-        codesign -f -o runtime --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "${{ env.NEW_DMG_PATH }}" --deep
-        
-        # 提交到公证服务
-        echo "Submitting to Apple notarization service..."
-        SUBMISSION_ID=$(xcrun notarytool submit "${{ env.NEW_DMG_PATH }}" --keychain-profile "comfyui" --wait --no-s3-acceleration | grep "id:" | head -1 | awk '{print $2}')
-        echo "SUBMISSION_ID=$SUBMISSION_ID" >> $GITHUB_ENV
-        
-        # 获取公证状态
-        if [ ! -z "$SUBMISSION_ID" ]; then
-          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "comfyui"
-        fi
-        
-        # 注入公证信息
-        echo "Stapling notarization ticket to DMG..."
-        xcrun stapler staple "${{ env.NEW_DMG_PATH }}" || true
-        
-        # 验证签名和公证
-        echo "Verifying signature and notarization..."
-        codesign -vvv "${{ env.NEW_DMG_PATH }}"
-        spctl --assess -vv --type open "${{ env.NEW_DMG_PATH }}" || true
-        xcrun stapler validate "${{ env.NEW_DMG_PATH }}" || true
-
-    # 检查 DMG 文件是否存在
-    - name: Check final DMG file
-      run: |
-        if [ ! -f "${{ env.NEW_DMG_PATH }}" ]; then
-          echo "Final DMG file not found"
-          exit 1
-        fi
-        
         # 显示文件信息
-        ls -la "${{ env.NEW_DMG_PATH }}"
+        ls -la "${{ env.DMG_PATH }}"
 
-    # 发布 DMG 到 Release
+    # 4. 发布 DMG 到 Release
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: "${{ env.NEW_DMG_PATH }}"
-        name: "ComfyUI Desktop ${{ env.TAG }}"
-        body: "ComfyUI Desktop for macOS version ${{ env.TAG }}"
+        files: "${{ env.DMG_PATH }}"
+        name: "Auto Release ${{ github.sha }}"
+        body: "DMG package for commit ${{ github.sha }}"
         draft: false
         prerelease: true  # 标记为预发布
       env:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-        
+    
     - name: Send success notification to WeChat
       if: success()
       run: |
@@ -162,7 +167,7 @@ jobs:
         -d '{
               "msgtype": "text",
               "text": {
-                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.NEW_DMG_NAME }}"
+                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.DMG_NAME }}"
               }
             }'
 
