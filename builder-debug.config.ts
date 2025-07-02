@@ -23,7 +23,6 @@ const debugConfig: Configuration = {
     target: 'appimage',
   },
   asarUnpack: ['**/node_modules/node-pty/**/*'],
-  publish: 'never', // 禁止自动发布，避免需要GitHub Token
 };
 
 export default debugConfig;

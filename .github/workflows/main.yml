@@ -53,6 +53,7 @@ jobs:
         APPLE_ID: ${{ secrets.USER_NAME }}
         APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.ACCOUNT_PASSWORD }}
         APPLE_TEAM_ID: ${{ secrets.TEAM_ID }}
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         echo "Building project with DMG packaging..."
 
