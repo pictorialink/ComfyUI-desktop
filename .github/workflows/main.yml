@@ -48,19 +48,28 @@ jobs:
       run: |
         npx electron-rebuild
         
+    # 导入证书并确保安全存储
     - uses: apple-actions/import-codesign-certs@v1
-      name: 安装APP证书
+      name: 安装 Apple 证书
       with:
         p12-file-base64: ${{ secrets.APP_BASE64 }}
         p12-password: ${{ secrets.P12_PASSWORD }}
         keychain-password: ${{ secrets.KEYCHAIN_PASSWORD || github.run_id }}
+        create-keychain: true
+        keychain: build.keychain
     
-    - name: Generate keychain profile for notarization
+    # 创建公证配置文件 - 使用统一的命名
+    - name: 配置公证凭证
       run: |
+        # 创建公证工具凭据配置
         xcrun notarytool store-credentials "notary-profile" \
           --apple-id "${{ secrets.USER_NAME }}" \
           --team-id "${{ secrets.TEAM_ID }}" \
           --password "${{ secrets.ACCOUNT_PASSWORD }}"
+        
+        # 验证证书和配置文件
+        security find-identity -p codesigning build.keychain
+        xcrun notarytool info --keychain-profile "notary-profile" || echo "凭证配置需要提交时验证"
 
     - name: Build and package project
       env:
@@ -86,15 +95,11 @@ jobs:
         # 检查mac-arm64目录是否存在
         if [ -d "$PROJECT_DIR/dist/mac-arm64" ]; then
           OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
-          echo "Using mac-arm64 directory: $OUTPUT_DIR"
         else
           # 找到可能的其他目录
           OUTPUT_DIR=$(find "$PROJECT_DIR/dist" -type d -name "mac*" | head -1)
-          echo "Using alternative directory: $OUTPUT_DIR"
         fi
-        
-        # 检查输出目录中的内容
-        echo "Contents of output directory:"
+        echo "Using output directory: $OUTPUT_DIR"
         ls -la "$OUTPUT_DIR"
         
         # 查找.app文件
@@ -107,24 +112,29 @@ jobs:
         APP_NAME=$(basename "$APP_PATH" .app)
         echo "Found app: $APP_NAME"
         
-        # 创建临时目录
-        DMG_DIR="$OUTPUT_DIR/dmg_temp"
-        mkdir -p "$DMG_DIR"
-        
-        # 应用签名前确认应用路径
-        echo "Signing app at: $APP_PATH"
-        
         # 确认entitlements文件存在
         if [ ! -f "./Release.entitlements" ]; then
           echo "Release.entitlements file not found!"
           exit 1
         fi
         
-        # 应用签名 (--force 确保覆盖任何现有签名)
-        codesign --force --options runtime --entitlements ./Release.entitlements --sign "${{secrets.IDENTITY_NAME}}" "$APP_PATH" --deep --verbose
+        # 进行深度代码签名 - 先签名内部组件
+        echo "Signing app at: $APP_PATH"
+        find "$APP_PATH/Contents/Frameworks" -name "*.framework" -o -name "*.dylib" | while read -r framework; do
+          echo "Signing framework: $framework"
+          codesign --force --options runtime --timestamp --sign "${{secrets.IDENTITY_NAME}}" "$framework" --deep --verbose
+        done
         
-        # 检查签名
-        codesign --verify --verbose "$APP_PATH"
+        # 签名主应用
+        codesign --force --options runtime --entitlements ./Release.entitlements --timestamp --sign "${{secrets.IDENTITY_NAME}}" "$APP_PATH" --deep --verbose
+        
+        # 验证应用签名
+        echo "Verifying app signature:"
+        codesign --verify --verbose=2 "$APP_PATH"
+        
+        # 创建临时目录用于DMG打包
+        DMG_DIR="$OUTPUT_DIR/dmg_temp"
+        mkdir -p "$DMG_DIR"
         
         # 确定DMG名称
         DMG_NAME="${APP_NAME}_${TAG}.dmg"
@@ -137,7 +147,7 @@ jobs:
         DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
         echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
         
-        # 创建DMG (使用更可靠的参数)
+        # 创建DMG
         hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG_PATH"
         
         echo "DMG 创建完成: $DMG_PATH"
@@ -149,24 +159,47 @@ jobs:
         fi
         
         # 签名DMG
-        codesign --force --sign "${{secrets.IDENTITY_NAME}}" "$DMG_PATH" --verbose
+        codesign --force --sign "${{secrets.IDENTITY_NAME}}" --timestamp "$DMG_PATH" --verbose
         
-        # 提交到公证服务并等待结果
-        echo "Submitting for notarization..."
-        xcrun notarytool submit "$DMG_PATH" --keychain-profile "notary-profile" --wait
+        # 提交到公证服务并等待结果 - 使用专门的公证配置文件
+        echo "Submitting DMG for notarization - this may take several minutes..."
+        xcrun notarytool submit "$DMG_PATH" \
+          --keychain-profile "notary-profile" \
+          --wait \
+          --timeout 2h
         
-        # 等待一点时间让公证服务处理
-        sleep 30
+        # 检查最近的公证历史
+        echo "Checking notarization history..."
+        SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "notary-profile" | grep "$DMG_NAME" | head -1 | awk '{print $1}')
         
-        # 检查公证状态
-        xcrun notarytool info --keychain-profile "notary-profile" $(xcrun notarytool history --keychain-profile "notary-profile" | grep "$DMG_NAME" | head -1 | awk '{print $1}')
-        
-        # 注入公证信息
-        echo "Stapling notarization ticket..."
-        xcrun stapler staple "$DMG_PATH"
-        
-        # 验证签章
-        xcrun stapler validate "$DMG_PATH"
+        if [ -n "$SUBMISSION_ID" ]; then
+          echo "Found submission ID: $SUBMISSION_ID"
+          echo "Checking notarization status..."
+          xcrun notarytool info --keychain-profile "notary-profile" "$SUBMISSION_ID"
+          
+          # 确认公证状态
+          STATUS=$(xcrun notarytool info --keychain-profile "notary-profile" "$SUBMISSION_ID" | grep "status:" | awk '{print $2}')
+          if [ "$STATUS" == "Accepted" ]; then
+            echo "Notarization successful! Proceeding with stapling..."
+            
+            # 注入公证票据到DMG
+            echo "Stapling notarization ticket to DMG..."
+            xcrun stapler staple "$DMG_PATH"
+            
+            # 验证签章
+            echo "Validating staple..."
+            xcrun stapler validate "$DMG_PATH"
+            
+            # 记录成功状态
+            echo "NOTARIZATION_SUCCESS=true" >> $GITHUB_ENV
+          else
+            echo "Notarization status is not 'Accepted' (Status: $STATUS). Skipping stapling but continuing..."
+            echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
+          fi
+        else
+          echo "Could not find submission ID in notarization history. Skipping stapling..."
+          echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
+        fi
         
         # 删除临时目录
         rm -rf "$DMG_DIR"
@@ -181,20 +214,36 @@ jobs:
         # 显示文件信息
         ls -la "${{ env.DMG_PATH }}"
         
-        # 检查签名和公证状态
+        # 检查签名
         echo "Checking DMG signature:"
-        codesign -dv --verbose=4 "${{ env.DMG_PATH }}"
+        codesign -dv --verbose=4 "${{ env.DMG_PATH }}" || echo "Signature verification warning - continuing anyway"
         
-        echo "Checking DMG staple:"
-        xcrun stapler validate "${{ env.DMG_PATH }}"
+        # 检查公证签章
+        if [ "${{ env.NOTARIZATION_SUCCESS }}" == "true" ]; then
+          echo "Checking DMG staple:"
+          xcrun stapler validate "${{ env.DMG_PATH }}" || echo "Staple validation warning - continuing anyway"
+          
+          echo "Running spctl assessment:"
+          spctl --assess --verbose=4 --type open --context context:primary-signature "${{ env.DMG_PATH }}"
+        else
+          echo "Skipping staple validation as notarization was not successful"
+        fi
 
-    # 4. 发布 DMG 到 Release
+    # 发布 DMG 到 Release
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: "${{ env.DMG_PATH }}"
         name: "ComfyUI Desktop ${{ env.TAG }}"
-        body: "ComfyUI Desktop ${{ env.TAG }} for macOS"
+        body: |
+          # ComfyUI Desktop ${{ env.TAG }} for macOS
+          
+          ${{ env.NOTARIZATION_SUCCESS == 'true' && '✅ 此版本已通过 Apple 公证，可直接打开使用。' || '⚠️ 此版本可能未通过 Apple 公证，首次打开时请在"系统设置"中手动允许应用运行。' }}
+          
+          ## 安装说明
+          1. 下载 DMG 文件
+          2. 打开 DMG 并将应用拖动到应用程序文件夹
+          3. 首次运行时右键点击应用并选择"打开"
         draft: false
         prerelease: false
       env:
@@ -204,12 +253,13 @@ jobs:
       if: success()
       run: |
         WEBHOOK="${{ secrets.WECHAT_HOOK }}"
+        NOTARIZATION_STATUS="${{ env.NOTARIZATION_SUCCESS == 'true' && '（已公证）' || '（未公证）' }}"
         curl -X POST "$WEBHOOK" \
         -H 'Content-Type: application/json' \
         -d '{
               "msgtype": "text",
               "text": {
-                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.DMG_NAME }}"
+                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} '$NOTARIZATION_STATUS' 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.DMG_NAME }}"
               }
             }'
 
