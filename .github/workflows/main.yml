@@ -163,17 +163,18 @@ jobs:
         
         # 提交到公证服务并等待结果 - 使用专门的公证配置文件
         echo "Submitting DMG for notarization - this may take several minutes..."
-        xcrun notarytool submit "$DMG_PATH" \
+        NOTARY_RESULT=$(xcrun notarytool submit "$DMG_PATH" \
           --keychain-profile "notary-profile" \
           --wait \
-          --timeout 2h
+          --timeout 2h)
+        echo "Notarization submission result:"
+        echo "$NOTARY_RESULT"
         
-        # 检查最近的公证历史
-        echo "Checking notarization history..."
-        SUBMISSION_ID=$(xcrun notarytool history --keychain-profile "notary-profile" | grep "$DMG_NAME" | head -1 | awk '{print $1}')
+        # 从提交结果中直接提取 ID
+        SUBMISSION_ID=$(echo "$NOTARY_RESULT" | grep -o "id: [0-9a-f\-]\+" | head -1 | sed 's/id: //')
         
-        if [ -n "$SUBMISSION_ID" ]; then
-          echo "Found submission ID: $SUBMISSION_ID"
+        if [ -n "$SUBMISSION_ID" ] && [[ "$SUBMISSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+          echo "Found valid submission ID: $SUBMISSION_ID"
           echo "Checking notarization status..."
           xcrun notarytool info --keychain-profile "notary-profile" "$SUBMISSION_ID"
           
@@ -197,7 +198,7 @@ jobs:
             echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
           fi
         else
-          echo "Could not find submission ID in notarization history. Skipping stapling..."
+          echo "Could not extract a valid submission ID. Skipping stapling..."
           echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
         fi
         
