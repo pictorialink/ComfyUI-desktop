@@ -31,6 +31,14 @@ jobs:
         node-version: '20.x'
         corepack: true
 
+    - name: Set scripts execute permissions
+      run: |
+        chmod +x ./scripts/add-osx-cert.sh
+        chmod +x ./scripts/shim.sh
+        # 检查权限是否设置成功
+        ls -la ./scripts/add-osx-cert.sh
+        ls -la ./scripts/shim.sh
+
     - name: Install dependencies
       run: |
         yarn install
@@ -86,6 +94,12 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         echo "Building project..."
+        # 确保使用正确的 electron-builder 配置
+        # 添加以下内容到 package.json 的 build 配置或传递参数
+        # "hardenedRuntime": true,
+        # "gatekeeperAssess": false,
+        # "entitlements": "Release.entitlements",
+        # "entitlementsInherit": "Release.entitlements"
         yarn make
         
         # 找到构建的 app 文件
@@ -100,15 +114,51 @@ jobs:
         echo "APP_NAME=$(basename "$APP_PATH")" >> $GITHUB_ENV
         echo "App found: $APP_PATH"
 
-    - name: Sign .app bundle
+    - name: Sign app and binaries with hardened runtime
       run: |
-        # 重新签名 .app 及其所有内部组件
-        echo "Signing the .app bundle with all components..."
-        codesign -f -o runtime --deep --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "${{ env.APP_PATH }}"
+        # 首先需要签名所有内部的 dylib 和二进制文件
+        echo "Finding and signing all binaries and libraries..."
+        
+        # 签名所有的 .dylib 文件
+        find "${{ env.APP_PATH }}" -name "*.dylib" | while read -r file; do
+          echo "Signing dylib: $file"
+          codesign -f -o runtime --timestamp -s "${{ secrets.IDENTITY_NAME }}" "$file"
+        done
+        
+        # 签名所有的 .node 文件
+        find "${{ env.APP_PATH }}" -name "*.node" | while read -r file; do
+          echo "Signing node: $file"
+          codesign -f -o runtime --timestamp -s "${{ secrets.IDENTITY_NAME }}" "$file"
+        done
+        
+        # 签名所有可执行文件
+        find "${{ env.APP_PATH }}" -type f -perm +111 ! -path "*/.*" | while read -r file; do
+          file_type=$(file -b "$file")
+          if [[ $file_type == *"executable"* ]]; then
+            echo "Signing executable: $file"
+            codesign -f -o runtime --timestamp --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "$file"
+          fi
+        done
+        
+        # 特别处理 Electron Helper 应用
+        find "${{ env.APP_PATH }}" -path "*/Contents/Frameworks/Electron*Helper*.app" -type d | while read -r helper; do
+          echo "Signing Electron Helper app: $helper"
+          codesign -f -o runtime --timestamp --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "$helper"
+        done
+        
+        # 特别处理 framework
+        find "${{ env.APP_PATH }}" -path "*/Contents/Frameworks/*.framework" -type d | while read -r framework; do
+          echo "Signing framework: $framework"
+          codesign -f -o runtime --timestamp -s "${{ secrets.IDENTITY_NAME }}" "$framework"
+        done
+        
+        # 最后签名主应用
+        echo "Signing the main .app bundle..."
+        codesign -f -o runtime --deep --timestamp --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "${{ env.APP_PATH }}"
         
         # 验证签名
         echo "Verifying app signature..."
-        codesign -vvv "${{ env.APP_PATH }}"
+        codesign -vvv --deep "${{ env.APP_PATH }}"
         
     - name: Create DMG from signed app
       run: |
@@ -131,27 +181,25 @@ jobs:
         fi
         
         echo "DMG created: $DMG_PATH"
+        
+        # 签名DMG文件
+        echo "Signing DMG file..."
+        codesign -f -o runtime --timestamp -s "${{ secrets.IDENTITY_NAME }}" "$DMG_PATH"
 
     - name: Notarize DMG
       run: |
         # 提交到公证服务
         echo "Submitting to Apple notarization service..."
-        SUBMISSION_ID=$(xcrun notarytool submit "${{ env.DMG_PATH }}" --keychain-profile "comfyui" --wait --no-s3-acceleration | grep "id:" | head -1 | awk '{print $2}')
-        echo "SUBMISSION_ID=$SUBMISSION_ID" >> $GITHUB_ENV
-        
-        # 获取公证状态
-        if [ ! -z "$SUBMISSION_ID" ]; then
-          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "comfyui"
-        fi
+        xcrun notarytool submit "${{ env.DMG_PATH }}" --keychain-profile "comfyui" --wait
         
         # 注入公证信息
         echo "Stapling notarization ticket to DMG..."
-        xcrun stapler staple "${{ env.DMG_PATH }}" || true
+        xcrun stapler staple "${{ env.DMG_PATH }}"
         
         # 验证公证
         echo "Verifying notarization..."
-        xcrun stapler validate "${{ env.DMG_PATH }}" || true
-        spctl --assess -vv --type open "${{ env.DMG_PATH }}" || true
+        xcrun stapler validate "${{ env.DMG_PATH }}"
+        spctl --assess -vv --type open "${{ env.DMG_PATH }}"
 
     # 检查 DMG 文件是否存在
     - name: Check final DMG file

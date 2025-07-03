@@ -9,6 +9,20 @@
   "main": ".vite/build/main.cjs",
   "packageManager": "yarn@4.5.0",
   "type": "module",
+  "build": {
+    "appId": "org.comfy.desktop",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "scripts/entitlements.mac.plist",
+      "entitlementsInherit": "scripts/entitlements.mac.plist",
+      "target": [
+        "dmg"
+      ]
+    },
+    "afterSign": "./scripts/add-osx-cert.sh"
+  },
   "config": {
     "frontendVersion": "1.22.2",
     "comfyUI": {
