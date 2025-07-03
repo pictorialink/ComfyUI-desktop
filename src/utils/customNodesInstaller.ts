@@ -45,7 +45,8 @@ export async function installCustomNodes(logger:any): Promise<void> {
 
     let userNodes: CustomNode[] = [];
     const nodesToInstall = [...defaultNodes, ...userNodes];
-    await commandRun(`python -m pip install --pre torch==2.9.0.dev20250630 torchsde==0.2.6 torchvision==0.23.0.dev20250630 torchaudio==2.8.0.dev20250630 --extra-index-url https://download.pytorch.org/whl/nightly/cpu`,logger);
+    const pythonPath = path.join(comfyDir, '.venv', 'bin', 'python');
+    await commandRun(`${pythonPath} -m pip install --pre torch==2.9.0.dev20250630 torchsde==0.2.6 torchvision==0.23.0.dev20250630 torchaudio==2.8.0.dev20250630 --extra-index-url https://download.pytorch.org/whl/nightly/cpu`,logger);
 
     for (const node of nodesToInstall) {
       await installStart(node, comfyDir, comfyDir, logger);
@@ -468,31 +469,6 @@ function getDefaultNodes(): CustomNode[] {
       install_path: 'custom_nodes/ComfyUI-Custom-Node-Config',
       models: []
     },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-
     {
       name: 'comfyui-Core-cosxl',
       repository: '',
