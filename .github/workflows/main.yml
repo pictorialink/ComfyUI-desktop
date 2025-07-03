@@ -53,7 +53,7 @@ jobs:
     
     - name: Generate keychain profile for notarization
       run: |
-        xcrun notarytool store-credentials 'comfyui' \
+        xcrun notarytool store-credentials 'pictorial' \
           --apple-id "${{ secrets.USER_NAME }}" \
           --team-id "${{ secrets.TEAM_ID }}" \
           --password "${{ secrets.ACCOUNT_PASSWORD }}"
@@ -74,11 +74,13 @@ jobs:
         
         # 确定输出目录
         PROJECT_DIR=$(pwd)
+
         # 输出$PROJECT_DIR/dist/下所有目录
         echo "Output directories in $PROJECT_DIR/dist:"
         ls -d $PROJECT_DIR/dist/*
         ls -d $PROJECT_DIR/dist/mac-arm64/*
         OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
+
         # 创建临时目录
         DMG_DIR="$OUTPUT_DIR/dmg_temp"
         if [[ -d "$DMG_DIR" ]]; then
@@ -89,11 +91,14 @@ jobs:
         
         # 获取应用程序名称
         APP_NAME=$(basename "$OUTPUT_DIR"/*.app .app)
+
         # 应用程序大小
         APP_SIZE=$(du -sm $OUTPUT_DIR/*.app | awk '{print $1}')
         echo "App Size: ${APP_SIZE}M"
-        # 计算目标大小，APP_SIZE + 20MB 确保有足够空间
-        TARGET_SIZE=$((APP_SIZE + 20))
+
+        # 计算目标大小，APP_SIZE + 200MB 确保有足够空间
+        TARGET_SIZE=$((APP_SIZE + 200))
+
         # 确定DMG名称
         DMG_NAME="${APP_NAME}_${TAG}.dmg"
         echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
@@ -119,80 +124,30 @@ jobs:
         
         echo "DMG 创建完成: $DMG_PATH"
         
-        # 签名DMG文件
-        echo "Signing DMG file..."
-        codesign -f -s "${{secrets.IDENTITY_NAME}}" "$DMG_PATH"
-        
-        # 使用一致的配置文件名称
-        echo "创建notarytool凭证..."
-        xcrun notarytool store-credentials 'comfyui' \
-          --apple-id "${{ secrets.USER_NAME }}" \
-          --team-id "${{ secrets.TEAM_ID }}" \
-          --password "${{ secrets.ACCOUNT_PASSWORD }}"
-        
-        # 提交到公证服务
+        # 提交到公证服务并捕获详细信息
         echo "提交公证..."
-        xcrun notarytool submit "$DMG_PATH" --keychain-profile "comfyui" --wait > notarization_output.txt
-        cat notarization_output.txt
+        SUBMISSION_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" --keychain-profile "pictorial" --wait)
+        echo "$SUBMISSION_OUTPUT"
         
-        # 正确提取提交ID（只获取第一个匹配的ID）
-        SUBMISSION_ID=$(grep -m 1 "id: " notarization_output.txt | head -n 1 | awk '{print $2}')
-        echo "提取的Submission ID: $SUBMISSION_ID"
+        # 从输出中提取提交ID
+        SUBMISSION_ID=$(echo "$SUBMISSION_OUTPUT" | grep "id:" | awk '{print $2}')
+        echo "Submission ID: $SUBMISSION_ID"
         
         # 获取公证信息和日志
         if [ ! -z "$SUBMISSION_ID" ]; then
           echo "检查公证状态..."
-          xcrun notarytool info "$SUBMISSION_ID" --keychain-profile "comfyui"
-          
-          # 如果公证状态为Invalid，获取详细日志
-          STATUS=$(xcrun notarytool info "$SUBMISSION_ID" --keychain-profile "comfyui" | grep "status:" | awk '{print $2}')
-          echo "公证状态: $STATUS"
-          
-          if [ "$STATUS" = "Invalid" ]; then
-            echo "公证失败，获取详细日志..."
-            xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "comfyui" > notary_log.json
-            cat notary_log.json
-            
-            echo "公证失败，显示详细的日志内容..."
-            # 显示公证失败的具体原因
-            jq '.issues[] | {severity: .severity, message: .message, path: .path}' notary_log.json || echo "无法解析日志JSON"
-            
-            # 尝试重新签名并提交
-            echo "尝试重新签名应用并提交..."
-            codesign -f -o runtime --entitlements ./Release.entitlements -s "${{secrets.IDENTITY_NAME}}" -v "${OUTPUT_DIR}/${APP_NAME}.app" --deep --timestamp --options=runtime
-            
-            # 重新创建DMG
-            rm -f "$DMG_PATH"
-            hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG_PATH"
-            codesign -f -s "${{secrets.IDENTITY_NAME}}" "$DMG_PATH" --timestamp --options=runtime
-            
-            echo "重新提交公证..."
-            xcrun notarytool submit "$DMG_PATH" --keychain-profile "comfyui" --wait > notarization_retry.txt
-            cat notarization_retry.txt
-            
-            NEW_SUBMISSION_ID=$(grep -m 1 "id: " notarization_retry.txt | head -n 1 | awk '{print $2}')
-            echo "新的Submission ID: $NEW_SUBMISSION_ID"
-            
-            if [ ! -z "$NEW_SUBMISSION_ID" ]; then
-              echo "等待重试公证结果..."
-              xcrun notarytool wait "$NEW_SUBMISSION_ID" --keychain-profile "comfyui"
-              xcrun notarytool info "$NEW_SUBMISSION_ID" --keychain-profile "comfyui"
-              SUBMISSION_ID="$NEW_SUBMISSION_ID"
-            fi
-          fi
-        else
-          echo "警告: 无法提取提交ID"
+          xcrun notarytool info "$SUBMISSION_ID" --keychain-profile "pictorial"
+          echo "获取详细日志..."
+          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "pictorial" notary_log.json
+          cat notary_log.json
         fi
         
         # 注入公证信息
         echo "注入公证信息..."
-        xcrun stapler staple "$DMG_PATH" || echo "Stapling可能失败，但继续执行"
+        xcrun stapler staple "$DMG_PATH"
         # 验证公证
         echo "验证公证结果..."
-        xcrun stapler validate "$DMG_PATH" || echo "验证可能失败，但继续执行"
-        
-        # 无论公证是否成功，都保留DMG文件以便发布
-        echo "DMG文件路径: $DMG_PATH"
+        xcrun stapler validate "$DMG_PATH"
         
         # 删除临时目录
         rm -rf "$DMG_DIR"
