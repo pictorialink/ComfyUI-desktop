@@ -133,11 +133,12 @@ export class HuggingFaceDownloader {
 
       response.data.on('data', (chunk: Buffer) => {
         downloadedBytes += chunk.length;
+        
         progressBar.tick(chunk.length);
 
         // 每100ms更新一次进度显示，避免过于频繁的回调
         const now = Date.now();
-        if (now - this.lastUpdateTime >= 100) {
+        if (now - this.lastUpdateTime >= 100 && downloadedBytes > 0) {
           const progressString = this.formatProgressString(remotePath, downloadedBytes, fileSize);
           this.options.callback?.(`\r${progressString}`);
           this.lastUpdateTime = now;
