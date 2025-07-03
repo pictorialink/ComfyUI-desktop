@@ -14,7 +14,11 @@ jobs:
     steps:
     - name: Set TAG environment variable
       run: |
-        TAG="${GITHUB_REF#refs/tags/}"
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+        else
+          TAG="${GITHUB_REF#refs/heads/}-$(date +'%Y%m%d%H%M%S')"
+        fi
         echo "TAG=$TAG" >> $GITHUB_ENV
         echo "Setting TAG to $TAG"
 
@@ -100,9 +104,10 @@ jobs:
         
         echo "DMG file created: $DMG_PATH"
         
-        # 添加版本号到 DMG 文件名
+        # 添加版本号到 DMG 文件名（使用简单版本号而非完整路径）
         NEW_DMG_NAME="ComfyUI_Desktop_${TAG}.dmg"
         NEW_DMG_PATH="./dist/${NEW_DMG_NAME}"
+        mkdir -p ./dist
         cp "$DMG_PATH" "$NEW_DMG_PATH"
         echo "NEW_DMG_PATH=$NEW_DMG_PATH" >> $GITHUB_ENV
         echo "NEW_DMG_NAME=$NEW_DMG_NAME" >> $GITHUB_ENV
