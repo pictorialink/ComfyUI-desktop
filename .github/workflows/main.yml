@@ -81,129 +81,40 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
       run: |
         echo "Building project with DMG packaging..."
-
+        # 构建应用并创建DMG
         yarn make
-
+        
         # 清理构建缓存以释放空间
         rm -rf node_modules/.cache
         
-        # 确定输出目录
-        PROJECT_DIR=$(pwd)
-        echo "Output directories in $PROJECT_DIR/dist:"
-        ls -la $PROJECT_DIR/dist/
-        
-        # 检查mac-arm64目录是否存在
-        if [ -d "$PROJECT_DIR/dist/mac-arm64" ]; then
-          OUTPUT_DIR="$PROJECT_DIR/dist/mac-arm64"
-        else
-          # 找到可能的其他目录
-          OUTPUT_DIR=$(find "$PROJECT_DIR/dist" -type d -name "mac*" | head -1)
-        fi
-        echo "Using output directory: $OUTPUT_DIR"
-        ls -la "$OUTPUT_DIR"
-        
-        # 查找.app文件
-        APP_PATH=$(find "$OUTPUT_DIR" -name "*.app" -type d | head -1)
-        if [ -z "$APP_PATH" ]; then
-          echo "No .app file found in output directory!"
+        # 查找DMG文件
+        DMG_PATH=$(find "./dist" -name "*.dmg" | head -1)
+        if [ -z "$DMG_PATH" ]; then
+          echo "DMG file not found in dist directory!"
           exit 1
         fi
         
-        APP_NAME=$(basename "$APP_PATH" .app)
-        echo "Found app: $APP_NAME"
+        # 获取DMG文件名
+        DMG_NAME=$(basename "$DMG_PATH")
+        echo "Found DMG: $DMG_NAME at $DMG_PATH"
         
-        # 确认entitlements文件存在
-        if [ ! -f "./Release.entitlements" ]; then
-          echo "Release.entitlements file not found!"
-          exit 1
-        fi
-        
-        # 进行深度代码签名 - 先签名内部组件
-        echo "Signing app at: $APP_PATH"
-        find "$APP_PATH/Contents/Frameworks" -name "*.framework" -o -name "*.dylib" | while read -r framework; do
-          echo "Signing framework: $framework"
-          codesign --force --options runtime --timestamp --sign "${{secrets.IDENTITY_NAME}}" "$framework" --deep --verbose
-        done
-        
-        # 签名主应用
-        codesign --force --options runtime --entitlements ./Release.entitlements --timestamp --sign "${{secrets.IDENTITY_NAME}}" "$APP_PATH" --deep --verbose
-        
-        # 验证应用签名
-        echo "Verifying app signature:"
-        codesign --verify --verbose=2 "$APP_PATH"
-        
-        # 创建临时目录用于DMG打包
-        DMG_DIR="$OUTPUT_DIR/dmg_temp"
-        mkdir -p "$DMG_DIR"
-        
-        # 确定DMG名称
-        DMG_NAME="${APP_NAME}_${TAG}.dmg"
+        # 设置环境变量供后续步骤使用
+        echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
         echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
         
-        # 将应用程序复制到临时目录
-        cp -R "$APP_PATH" "$DMG_DIR/"
-        
-        # 确定DMG路径
-        DMG_PATH="$OUTPUT_DIR/$DMG_NAME"
-        echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
-        
-        # 创建DMG
-        hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_DIR" -ov -format UDZO "$DMG_PATH"
-        
-        echo "DMG 创建完成: $DMG_PATH"
+        # 确保DMG文件可以被访问
+        chmod 644 "$DMG_PATH"
         
         # 验证DMG是否成功创建
         if [ ! -f "$DMG_PATH" ]; then
-          echo "DMG file was not created successfully!"
+          echo "DMG file was not accessible!"
           exit 1
         fi
         
-        # 签名DMG
-        codesign --force --sign "${{secrets.IDENTITY_NAME}}" --timestamp "$DMG_PATH" --verbose
+        # 公证成功状态设为false（如无公证流程）
+        echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
         
-        # 提交到公证服务并等待结果 - 使用专门的公证配置文件
-        echo "Submitting DMG for notarization - this may take several minutes..."
-        NOTARY_RESULT=$(xcrun notarytool submit "$DMG_PATH" \
-          --keychain-profile "notary-profile" \
-          --wait \
-          --timeout 2h)
-        echo "Notarization submission result:"
-        echo "$NOTARY_RESULT"
-        
-        # 从提交结果中直接提取 ID
-        SUBMISSION_ID=$(echo "$NOTARY_RESULT" | grep -o "id: [0-9a-f\-]\+" | head -1 | sed 's/id: //')
-        
-        if [ -n "$SUBMISSION_ID" ] && [[ "$SUBMISSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-          echo "Found valid submission ID: $SUBMISSION_ID"
-          echo "Checking notarization status..."
-          xcrun notarytool info --keychain-profile "notary-profile" "$SUBMISSION_ID"
-          
-          # 确认公证状态
-          STATUS=$(xcrun notarytool info --keychain-profile "notary-profile" "$SUBMISSION_ID" | grep "status:" | awk '{print $2}')
-          if [ "$STATUS" == "Accepted" ]; then
-            echo "Notarization successful! Proceeding with stapling..."
-            
-            # 注入公证票据到DMG
-            echo "Stapling notarization ticket to DMG..."
-            xcrun stapler staple "$DMG_PATH"
-            
-            # 验证签章
-            echo "Validating staple..."
-            xcrun stapler validate "$DMG_PATH"
-            
-            # 记录成功状态
-            echo "NOTARIZATION_SUCCESS=true" >> $GITHUB_ENV
-          else
-            echo "Notarization status is not 'Accepted' (Status: $STATUS). Skipping stapling but continuing..."
-            echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
-          fi
-        else
-          echo "Could not extract a valid submission ID. Skipping stapling..."
-          echo "NOTARIZATION_SUCCESS=false" >> $GITHUB_ENV
-        fi
-        
-        # 删除临时目录
-        rm -rf "$DMG_DIR"
+        echo "Build completed successfully. DMG ready for release."
     
     - name: Check DMG file
       run: |
@@ -215,20 +126,7 @@ jobs:
         # 显示文件信息
         ls -la "${{ env.DMG_PATH }}"
         
-        # 检查签名
-        echo "Checking DMG signature:"
-        codesign -dv --verbose=4 "${{ env.DMG_PATH }}" || echo "Signature verification warning - continuing anyway"
-        
-        # 检查公证签章
-        if [ "${{ env.NOTARIZATION_SUCCESS }}" == "true" ]; then
-          echo "Checking DMG staple:"
-          xcrun stapler validate "${{ env.DMG_PATH }}" || echo "Staple validation warning - continuing anyway"
-          
-          echo "Running spctl assessment:"
-          spctl --assess --verbose=4 --type open --context context:primary-signature "${{ env.DMG_PATH }}"
-        else
-          echo "Skipping staple validation as notarization was not successful"
-        fi
+        echo "DMG file is ready for upload: ${{ env.DMG_PATH }}"
 
     # 发布 DMG 到 Release
     - name: Create Release
@@ -238,8 +136,6 @@ jobs:
         name: "ComfyUI Desktop ${{ env.TAG }}"
         body: |
           # ComfyUI Desktop ${{ env.TAG }} for macOS
-          
-          ${{ env.NOTARIZATION_SUCCESS == 'true' && '✅ 此版本已通过 Apple 公证，可直接打开使用。' || '⚠️ 此版本可能未通过 Apple 公证，首次打开时请在"系统设置"中手动允许应用运行。' }}
           
           ## 安装说明
           1. 下载 DMG 文件
@@ -254,13 +150,12 @@ jobs:
       if: success()
       run: |
         WEBHOOK="${{ secrets.WECHAT_HOOK }}"
-        NOTARIZATION_STATUS="${{ env.NOTARIZATION_SUCCESS == 'true' && '（已公证）' || '（未公证）' }}"
         curl -X POST "$WEBHOOK" \
         -H 'Content-Type: application/json' \
         -d '{
               "msgtype": "text",
               "text": {
-                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} '$NOTARIZATION_STATUS' 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.DMG_NAME }}"
+                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ env.DMG_NAME }}"
               }
             }'
 
