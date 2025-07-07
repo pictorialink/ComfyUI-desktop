@@ -193,6 +193,7 @@ export class HuggingFaceDownloader {
 
   /** 格式化进度条字符串，简洁版本 */
   private formatProgressString(remotePath: string, current: number, total: number): string {
+    if (total === 0 || !total) return '';
     const percent = Math.round((current / total) * 100);
     const barWidth = 30;
     const completedWidth = Math.round((current / total) * barWidth);
