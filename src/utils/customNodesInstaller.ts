@@ -45,7 +45,8 @@ export async function installCustomNodes(logger:any): Promise<void> {
 
     let userNodes: CustomNode[] = [];
     const nodesToInstall = [...defaultNodes, ...userNodes];
-    await commandRun(`python -m pip install --pre torch==2.9.0.dev20250630 torchsde==0.2.6 torchvision==0.23.0.dev20250630 torchaudio==2.8.0.dev20250630 --extra-index-url https://download.pytorch.org/whl/nightly/cpu`,logger);
+    const pythonPath = path.join(comfyDir, '.venv', 'bin', 'python');
+    await commandRun(`${pythonPath} -m pip install --pre torch==2.9.0.dev20250630 torchsde==0.2.6 torchvision==0.23.0.dev20250630 torchaudio==2.8.0.dev20250630 --extra-index-url https://download.pytorch.org/whl/nightly/cpu`,logger);
 
     for (const node of nodesToInstall) {
       await installStart(node, comfyDir, comfyDir, logger);
@@ -231,20 +232,20 @@ function getDefaultNodes(): CustomNode[] {
         },
       ]
     },
-    {
-      name: 'ComfyUI_MiniCPM-V-2_6-int4',
-      repository: 'https://github.com/pictorialink/ComfyUI-MiniCPM-V-2_6-int4.git',
-      version: 'ed210d86d48a58712356e8ad0fac255eead94206',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-MiniCPM-V-2_6-int4',
-      models: [
-        {
-          url: 'https://huggingface.co/openbmb/MiniCPM-V-2_6-int4',
-          path: 'models/prompt_generator/MiniCPM-V-2_6-int4',
-          repoid:"openbmb/MiniCPM-V-2_6-int4"
-        },
-      ]
-    },
+    // {
+    //   name: 'ComfyUI_MiniCPM-V-2_6-int4',
+    //   repository: 'https://github.com/pictorialink/ComfyUI-MiniCPM-V-2_6-int4.git',
+    //   version: 'ed210d86d48a58712356e8ad0fac255eead94206',
+    //   type: 'Community',
+    //   install_path: 'custom_nodes/ComfyUI-MiniCPM-V-2_6-int4',
+    //   models: [
+    //     {
+    //       url: 'https://huggingface.co/openbmb/MiniCPM-V-2_6-int4',
+    //       path: 'models/prompt_generator/MiniCPM-V-2_6-int4',
+    //       repoid:"openbmb/MiniCPM-V-2_6-int4"
+    //     },
+    //   ]
+    // },
     {
       name: 'comfyui-mixlab-nodes',
       repository: 'https://github.com/pictorialink/ComfyUI-mixlab-nodes.git',
@@ -366,14 +367,14 @@ function getDefaultNodes(): CustomNode[] {
       install_path: 'custom_nodes/ComfyUI-masquerade-nodes',
       models: []
     },
-    {
-      name: 'ComfyUI-AdvancedLivePortrait',
-      repository: 'https://github.com/pictorialink/ComfyUI-AdvancedLivePortrait.git',
-      version: '3bba732915e22f18af0d221b9c5c282990181f1b',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-AdvancedLivePortrait',
-      models: []
-    },
+    // {
+    //   name: 'ComfyUI-AdvancedLivePortrait',
+    //   repository: 'https://github.com/pictorialink/ComfyUI-AdvancedLivePortrait.git',
+    //   version: '3bba732915e22f18af0d221b9c5c282990181f1b',
+    //   type: 'Community',
+    //   install_path: 'custom_nodes/ComfyUI-AdvancedLivePortrait',
+    //   models: []
+    // },
     {
       name: 'Comfyui_cgem156',
       repository: 'https://github.com/pictorialink/ComfyUI-cgem156.git',
@@ -468,31 +469,6 @@ function getDefaultNodes(): CustomNode[] {
       install_path: 'custom_nodes/ComfyUI-Custom-Node-Config',
       models: []
     },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-    {
-      name: 'comfyui-static-resource',
-      repository: 'https://github.com/pictorialink/ComfyUI-static-resource.git',
-      version: '9a817d82979690b01227a6b5563a028729931ad7',
-      type: 'Community',
-      install_path: 'custom_nodes/ComfyUI-static-resource',
-      models: []
-    },
-
     {
       name: 'comfyui-Core-cosxl',
       repository: '',
