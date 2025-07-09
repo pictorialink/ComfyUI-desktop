@@ -31,7 +31,10 @@
     "format:fix": "prettier --write .",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
-    "make": "yarn run vite:compile && electron-builder build --config=builder-debug.config.ts && yarn run verify:build",
+    "make": "yarn run vite:compile && yarn run rebuild:native && electron-builder build --config=builder-debug.config.ts && yarn run verify:build",
+    "clean:node-modules": "node scripts/cleanNodeModules.js",
+    "clean:pre-build": "node scripts/preBuildClean.js",
+    "rebuild:native": "npx electron-rebuild",
     "make:assets": "node scripts/makeComfy.js",
     "make:nvidia": "yarn run make -- --nvidia",
     "notarize": "node debug/notarize.js",
@@ -103,6 +106,7 @@
   "dependencies": {
     "@huggingface/hub": "^2.2.0",
     "@huggingface/inference": "^4.0.6",
+    "@opentelemetry/api-logs": "^0.202.0",
     "@sentry/electron": "^5.4.0",
     "@sentry/vite-plugin": "^2.22.6",
     "@todesktop/runtime": "^1.6.4",
@@ -125,5 +129,8 @@
     "tmp": "^0.2.3",
     "wait-on": "^8.0.1",
     "yaml": "^2.6.0"
+  },
+  "build": {
+    "asar": true
   }
 }

@@ -337,6 +337,7 @@ export class VirtualEnvironment implements HasTelemetry {
       args,
       {
         PYTHONIOENCODING: 'utf8',
+        PYTORCH_ENABLE_MPS_FALLBACK: '1',
       },
       callbacks
     );
