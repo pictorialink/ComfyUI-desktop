@@ -87,6 +87,7 @@ jobs:
       run: |
         echo "Building project..."
         yarn run download:uv
+        yarn run make:assets
         yarn make
         
         # 找到构建的 app 文件
