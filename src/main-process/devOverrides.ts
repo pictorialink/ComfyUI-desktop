@@ -19,6 +19,8 @@ export class DevOverrides {
   public readonly DEV_TOOLS_AUTO?: string;
   /** Send events to Sentry */
   public readonly SENTRY_ENABLED?: string;
+  /** GitHub API Token for accessing repositories */
+  public readonly GH_API_TOKEN?: string;
 
   constructor() {
     if (app.commandLine.hasSwitch('dev-mode') || !app.isPackaged) {
@@ -30,6 +32,10 @@ export class DevOverrides {
       this.USE_EXTERNAL_SERVER = process.env.USE_EXTERNAL_SERVER;
       this.DEV_TOOLS_AUTO = process.env.DEV_TOOLS_AUTO;
       this.SENTRY_ENABLED = process.env.SENTRY_ENABLED;
+      this.GH_API_TOKEN = process.env.GH_API_TOKEN;
+    } else {
+      // 在打包模式下，仍然允许读取 GH_API_TOKEN
+      this.GH_API_TOKEN = process.env.GH_API_TOKEN;
     }
   }
 

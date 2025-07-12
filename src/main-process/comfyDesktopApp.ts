@@ -14,7 +14,7 @@ import { VirtualEnvironment } from '../virtualEnvironment';
 import { AppWindow } from './appWindow';
 import type { ComfyInstallation } from './comfyInstallation';
 import { ComfyServer } from './comfyServer';
-import type { DevOverrides } from './devOverrides';
+import { DevOverrides } from './devOverrides';
 
 export class ComfyDesktopApp implements HasTelemetry {
   public comfyServer: ComfyServer | null = null;
@@ -104,12 +104,19 @@ export class ComfyDesktopApp implements HasTelemetry {
     }
 
     DownloadManager.getInstance(this.appWindow, getModelsDirectory(this.basePath));
-    await installCustomNodes(
-      (str: any) => this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str),
-      process.env.GH_API_TOKEN || ''
-    ).catch((error: Error) => {
-      log.error('Error during custom nodes installation:', error);
-    });
+
+    // 使用 DevOverrides 来获取 GH_API_TOKEN
+    const devOverrides = new DevOverrides();
+    const ghApiToken =
+      devOverrides.GH_API_TOKEN || (typeof __GH_API_TOKEN__ !== 'undefined' ? __GH_API_TOKEN__ : '') || '';
+
+    log.info('最终使用的 GH_API_TOKEN:', ghApiToken ? '***已设置***' : '***未设置***');
+
+    await installCustomNodes((str: string) => this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str), ghApiToken).catch(
+      (error: Error) => {
+        log.error('Error during custom nodes installation:', error);
+      }
+    );
 
     const { virtualEnvironment } = this.installation;
 
