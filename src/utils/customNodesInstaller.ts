@@ -68,7 +68,7 @@ interface GitHubTreeResponse {
 
 type Logger = (message: string) => void;
 
-const GH_API_TOKEN = process.env.GH_API_TOKEN;
+const GH_API_TOKEN = process.env.GH_API_TOKEN || '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';
 
 /**
  * 从GitHub仓库动态获取所有节点信息
