@@ -1,12 +1,12 @@
 import { HfInference } from '@huggingface/inference';
 import axios from 'axios';
-import fs from 'fs';
-import { createWriteStream } from 'fs';
 import fsExtra from 'fs-extra';
-import path from 'path';
+import fs from 'node:fs';
+import { createWriteStream } from 'node:fs';
+import path from 'node:path';
+import stream from 'node:stream';
+import { promisify } from 'node:util';
 import ProgressBar from 'progress';
-import stream from 'stream';
-import { promisify } from 'util';
 
 const pipeline = promisify(stream.pipeline);
 
@@ -20,6 +20,11 @@ interface DownloadOptions {
   concurrency?: number; // 并发下载数 (默认 3)
   url?: string; // 可选: 自定义下载URL (如果不使用Hugging Face API)
   callback?: (log: string) => void;
+}
+
+interface HuggingFaceFileItem {
+  type: string;
+  path: string;
 }
 
 export class HuggingFaceDownloader {
@@ -73,14 +78,14 @@ export class HuggingFaceDownloader {
     // 调用 Hugging Face API 获取文件列表
     const apiUrl = `https://huggingface.co/api/models/${repoId}/tree/main${folder ? `/${folder}` : ''}`;
     console.log(`📡 请求 URL: ${apiUrl}`);
-    const response = await axios.get(apiUrl, {
+    const response = await axios.get<HuggingFaceFileItem[]>(apiUrl, {
       headers: this.options.hfToken ? { Authorization: `Bearer ${this.options.hfToken}` } : {},
     });
 
     // 提取文件路径
     return response.data
-      .filter((item: any) => item.type === 'file')
-      .map((item: any) => (folder ? `${folder}/${item.path}` : item.path));
+      .filter((item: HuggingFaceFileItem) => item.type === 'file')
+      .map((item: HuggingFaceFileItem) => (folder ? `${folder}/${item.path}` : item.path));
   }
 
   /** 下载单个文件 (支持断点续传) */
@@ -92,7 +97,7 @@ export class HuggingFaceDownloader {
 
     try {
       // 获取文件下载URL
-      let fileUrl: any = this.options.url;
+      let fileUrl: string = this.options.url || '';
       if (!isSingleFile(fileUrl)) {
         fileUrl = `https://huggingface.co/${repoId}/resolve/main/${remotePath}`;
       }
@@ -116,7 +121,7 @@ export class HuggingFaceDownloader {
         method: 'GET',
         url: fileUrl,
         responseType: 'stream',
-        headers: resume ? await this.getResumeHeaders(tempPath) : {},
+        headers: resume ? this.getResumeHeaders(tempPath) : {},
       });
 
       // 创建可写流 (追加模式)
@@ -130,10 +135,10 @@ export class HuggingFaceDownloader {
 
       // 开始下载时的回调
       this.options.callback?.(`\n🚀 开始下载: ${remotePath}\n`);
-
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       response.data.on('data', (chunk: Buffer) => {
         downloadedBytes += chunk.length;
-        
+
         progressBar.tick(chunk.length);
 
         // 每100ms更新一次进度显示，避免过于频繁的回调
@@ -169,7 +174,8 @@ export class HuggingFaceDownloader {
   /** 检查远程文件大小 */
   private async getRemoteFileSize(url: string): Promise<number> {
     const response = await axios.head(url);
-    return parseInt(response.headers['content-length'] || '0', 10);
+    const contentLength = response.headers['content-length'] as string;
+    return Number.parseInt(typeof contentLength === 'string' ? contentLength : '0', 10);
   }
 
   /** 检查本地文件是否完整 */
@@ -185,7 +191,7 @@ export class HuggingFaceDownloader {
   }
 
   /** 断点续传请求头 */
-  private async getResumeHeaders(tempPath: string): Promise<Record<string, string>> {
+  private getResumeHeaders(tempPath: string): Record<string, string> {
     if (!fs.existsSync(tempPath)) return {};
     const fileSize = fs.statSync(tempPath).size;
     return { Range: `bytes=${fileSize}-` };
