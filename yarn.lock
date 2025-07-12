@@ -230,6 +230,7 @@ __metadata:
     "@eslint/js": "npm:^9.17.0"
     "@huggingface/hub": "npm:^2.2.0"
     "@huggingface/inference": "npm:^4.0.6"
+    "@opentelemetry/api-logs": "npm:^0.202.0"
     "@playwright/test": "npm:^1.47.2"
     "@sentry/electron": "npm:^5.4.0"
     "@sentry/vite-plugin": "npm:^2.22.6"
@@ -1464,6 +1465,15 @@ __metadata:
   dependencies:
     "@opentelemetry/api": "npm:^1.3.0"
   checksum: 10c0/1e514d3fd4ca68e7e8b008794a95ee0562a5d9e1d3ebb02647b245afaa6c2d72cc14e99e3ea47a1d1007f8a965c62bfb6170e1aa26756230bea063cfde2898bf
+  languageName: node
+  linkType: hard
+
+"@opentelemetry/api-logs@npm:^0.202.0":
+  version: 0.202.0
+  resolution: "@opentelemetry/api-logs@npm:0.202.0"
+  dependencies:
+    "@opentelemetry/api": "npm:^1.3.0"
+  checksum: 10c0/2b6fd961c9303c5581367e7bef16a0cc7e7fc9a22ffae417ac7812151238760a9c0db20aad2c222c492cd8afc8353a611076bcac9272168d04b64e6386e71a66
   languageName: node
   linkType: hard
 

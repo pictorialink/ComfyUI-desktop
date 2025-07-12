@@ -19,7 +19,7 @@ export default defineConfig((env) => {
       },
       rollupOptions: { external },
       sourcemap: true,
-      minify: false,
+      minify: true,
     },
     server: {
       watch: {

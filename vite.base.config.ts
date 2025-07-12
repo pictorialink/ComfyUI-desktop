@@ -8,6 +8,9 @@ export const builtins = ['electron', ...builtinModules.flatMap((m) => [m, `node:
 export const external = [
   ...builtins,
   ...Object.keys('dependencies' in pkg ? (pkg.dependencies as Record<string, unknown>) : {}),
+  // 添加可能被清理但仍被引用的模块
+  '@opentelemetry/api-logs',
+  '@opentelemetry/instrumentation',
 ];
 
 export function getBuildConfig(env: ConfigEnv): UserConfig {
