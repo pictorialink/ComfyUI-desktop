@@ -68,7 +68,7 @@ interface GitHubTreeResponse {
 
 type Logger = (message: string) => void;
 
-const GH_API_TOKEN = process.env.GH_API_TOKEN || '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';
+let GH_API_TOKEN = '';
 
 /**
  * 从GitHub仓库动态获取所有节点信息
@@ -99,7 +99,7 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
     for (const dir of targetDirs) {
       logger(`正在扫描目录: ${dir}\n`);
       const dirNodes = await getNodesFromDirectory(repoPath, dir, logger);
-      allNodes = [...allNodes, ...dirNodes];
+      allNodes = [...dirNodes, ...allNodes];
     }
 
     // 去重处理
@@ -505,7 +505,8 @@ function extractNodeName(repoId: string): string {
   return parts.at(-1) || ''; // 取最后一部分作为节点名称
 }
 
-export async function installCustomNodes(logger: Logger): Promise<void> {
+export async function installCustomNodes(logger: Logger, token: string): Promise<void> {
+  GH_API_TOKEN = token;
   try {
     // const comfyDir = path.join(app.getPath('home'), 'ComfyUI');
     const comfyDir = getDefaultInstallLocation();

@@ -9,13 +9,12 @@ import { DownloadManager } from '../models/DownloadManager';
 import { HasTelemetry, ITelemetry } from '../services/telemetry';
 import { Terminal } from '../shell/terminal';
 import { findAvailablePort, getModelsDirectory } from '../utils';
+import { installCustomNodes } from '../utils/customNodesInstaller';
 import { VirtualEnvironment } from '../virtualEnvironment';
 import { AppWindow } from './appWindow';
 import type { ComfyInstallation } from './comfyInstallation';
 import { ComfyServer } from './comfyServer';
 import type { DevOverrides } from './devOverrides';
-import { installCustomNodes } from '../utils/customNodesInstaller';
-
 
 export class ComfyDesktopApp implements HasTelemetry {
   public comfyServer: ComfyServer | null = null;
@@ -105,7 +104,10 @@ export class ComfyDesktopApp implements HasTelemetry {
     }
 
     DownloadManager.getInstance(this.appWindow, getModelsDirectory(this.basePath));
-    await installCustomNodes?.((str:any)=>this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str)).catch((error: Error) => {
+    await installCustomNodes(
+      (str: any) => this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str),
+      process.env.GH_API_TOKEN || ''
+    ).catch((error: Error) => {
       log.error('Error during custom nodes installation:', error);
     });
 
