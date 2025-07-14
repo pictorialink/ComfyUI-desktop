@@ -332,9 +332,12 @@ export class VirtualEnvironment implements HasTelemetry {
         ? path.join(this.venvPath, 'Scripts', 'python.exe')
         : path.join(this.venvPath, 'bin', 'python');
 
+    // Add --disable-metadata to the args
+    const modifiedArgs = [...args, '--disable-metadata'];
+
     return this.runCommand(
       pythonInterpreterPath,
-      args,
+      modifiedArgs,
       {
         PYTHONIOENCODING: 'utf8',
         PYTORCH_ENABLE_MPS_FALLBACK: '1',

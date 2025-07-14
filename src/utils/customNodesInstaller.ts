@@ -1,8 +1,13 @@
 // src/utils/customNodesInstaller.ts
+import AdmZip from 'adm-zip';
 import axios from 'axios';
 import log from 'electron-log/main';
 import fs from 'node:fs';
+import { createWriteStream } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
+import { promisify } from 'node:util';
 
 import { getDefaultInstallLocation } from '../../tests/shared/utils';
 import { HuggingFaceDownloader } from './download_model';
@@ -43,32 +48,64 @@ interface RepoModels {
   cuda?: ModelItem[];
 }
 
-interface GitHubTag {
-  name: string;
-  commit: {
-    sha: string;
-    url: string;
-  };
-  zipball_url: string;
-  tarball_url: string;
-}
-
-interface GitHubTreeItem {
-  path: string;
-  type: 'blob' | 'tree';
-  sha: string;
-  size?: number;
-  url: string;
-}
-
-interface GitHubTreeResponse {
-  tree: GitHubTreeItem[];
-  truncated: boolean;
+interface TagsData {
+  [repoId: string]: string[];
 }
 
 type Logger = (message: string) => void;
 
 let GH_API_TOKEN = '';
+let TAGS_DATA: TagsData | null = null;
+
+/**
+ * 从ComfyUI-Custom-Node-Tags仓库加载标签数据
+ * @param logger 日志回调函数
+ * @returns 标签数据
+ */
+async function loadTagsData(logger: Logger): Promise<TagsData> {
+  if (TAGS_DATA) {
+    return TAGS_DATA;
+  }
+
+  let tempDir: string | null = null;
+
+  try {
+    const tagsRepoUrl = 'https://github.com/pictorialink/ComfyUI-Custom-Node-Tags';
+    logger(`正在加载标签数据从: ${tagsRepoUrl}\n`);
+
+    // 下载并解压标签仓库
+    tempDir = await downloadAndExtractRepo(tagsRepoUrl, logger);
+
+    // 读取 update-tag.json 文件
+    const tagsFilePath = path.join(tempDir, 'update-tag.json');
+
+    if (!fs.existsSync(tagsFilePath)) {
+      throw new Error('update-tag.json 文件不存在');
+    }
+
+    const tagsContent = await fs.promises.readFile(tagsFilePath, 'utf8');
+    TAGS_DATA = JSON.parse(tagsContent) as TagsData;
+
+    logger(`标签数据加载完成，包含 ${Object.keys(TAGS_DATA).length} 个仓库的标签信息\n`);
+
+    return TAGS_DATA;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger(`加载标签数据失败: ${errorMessage}\n`);
+    // 返回空对象作为fallback
+    TAGS_DATA = {};
+    return TAGS_DATA;
+  } finally {
+    // 清理临时目录
+    if (tempDir && fs.existsSync(tempDir)) {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        logger(`清理标签数据临时目录失败: ${error}\n`);
+      }
+    }
+  }
+}
 
 /**
  * 从GitHub仓库动态获取所有节点信息
@@ -76,14 +113,15 @@ let GH_API_TOKEN = '';
  * @returns 合并后的节点信息数组
  */
 export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
+  let tempDir: string | null = null;
+
   try {
     // 检查 GitHub Token
     if (!GH_API_TOKEN) {
       logger(`⚠️ 警告: 未设置 GitHub Token\n`);
     }
 
-    const repoUrl = 'https://github.com/pictorialink/Picto-workflow.git';
-    const repoPath = 'pictorialink/Picto-workflow';
+    const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
     const targetDirs = ['common', 'mps'];
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
@@ -95,10 +133,13 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
       },
     ];
 
+    // 下载并解压仓库
+    tempDir = await downloadAndExtractRepo(repoUrl, logger);
+
     // 遍历目标目录
     for (const dir of targetDirs) {
       logger(`正在扫描目录: ${dir}\n`);
-      const dirNodes = await getNodesFromDirectory(repoPath, dir, logger);
+      const dirNodes = await getNodesFromLocalDirectory(tempDir, dir, logger);
       allNodes = [...dirNodes, ...allNodes];
     }
 
@@ -110,27 +151,114 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger(`获取节点信息失败: ${errorMessage}\n`);
     throw error;
+  } finally {
+    // 清理临时目录
+    if (tempDir && fs.existsSync(tempDir)) {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+        logger(`已清理临时目录: ${tempDir}\n`);
+      } catch (error) {
+        logger(`清理临时目录失败: ${error}\n`);
+      }
+    }
   }
 }
 
 /**
- * 从指定目录递归获取所有node.json文件中的节点信息
+ * 下载并解压GitHub仓库
+ * @param repoUrl 仓库URL
+ * @param logger 日志回调函数
+ * @returns 解压后的临时目录路径
  */
-async function getNodesFromDirectory(repoPath: string, directory: string, logger: Logger): Promise<NodeInfo[]> {
+async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<string> {
+  const streamPipeline = promisify(pipeline);
+
   try {
-    const nodeJsonFiles = await findNodeJsonFiles(repoPath, directory);
+    // 生成临时目录
+    const tempDir = fs.mkdtempSync(path.join(tmpdir(), 'picto-workflow-'));
+    const zipPath = path.join(tempDir, 'repo.zip');
+
+    // 下载仓库的zip文件
+    const downloadUrl = `${repoUrl}/archive/refs/heads/main.zip`;
+    logger(`开始下载仓库: ${downloadUrl}\n`);
+
+    const headers: Record<string, string> = {};
+    if (GH_API_TOKEN) {
+      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
+    }
+
+    const response = await axios({
+      method: 'GET',
+      url: downloadUrl,
+      responseType: 'stream',
+      headers,
+    });
+
+    // 确保响应数据是流
+    if (!response.data) {
+      throw new Error('下载响应数据为空');
+    }
+
+    // 保存zip文件
+    const writeStream = createWriteStream(zipPath);
+    await streamPipeline(response.data as NodeJS.ReadableStream, writeStream);
+
+    logger(`下载完成，开始解压缩到: ${tempDir}\n`);
+
+    // 解压缩
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(tempDir, true);
+
+    // 删除zip文件
+    fs.unlinkSync(zipPath);
+
+    // 查找解压后的目录（通常是 reponame-main）
+    const extractedDirs = fs.readdirSync(tempDir).filter((item) => fs.statSync(path.join(tempDir, item)).isDirectory());
+
+    if (extractedDirs.length === 0) {
+      throw new Error('解压后未找到有效目录');
+    }
+
+    const extractedPath = path.join(tempDir, extractedDirs[0]);
+    logger(`仓库解压完成: ${extractedPath}\n`);
+
+    return extractedPath;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger(`下载和解压仓库失败: ${errorMessage}\n`);
+    throw error;
+  }
+}
+
+/**
+ * 从本地目录递归获取所有node.json文件中的节点信息
+ * @param repoPath 仓库本地路径
+ * @param directory 目标目录
+ * @param logger 日志回调函数
+ * @returns 节点信息数组
+ */
+async function getNodesFromLocalDirectory(repoPath: string, directory: string, logger: Logger): Promise<NodeInfo[]> {
+  try {
+    const targetPath = path.join(repoPath, directory);
+
+    if (!fs.existsSync(targetPath)) {
+      logger(`目录不存在: ${targetPath}\n`);
+      return [];
+    }
+
+    const nodeJsonFiles = await findNodeJsonFilesRecursive(targetPath);
     logger(`在目录 ${directory} 中找到 ${nodeJsonFiles.length} 个 node.json 文件\n`);
 
     let allNodes: NodeInfo[] = [];
 
     for (const filePath of nodeJsonFiles) {
       try {
-        const nodes = await getNodesFromFile(repoPath, filePath, logger);
+        const nodes = await readNodeJsonFile(filePath, logger);
         allNodes = [...allNodes, ...nodes];
-        logger(`从文件 ${filePath} 获取到 ${nodes.length} 个节点\n`);
+        logger(`从文件 ${path.relative(repoPath, filePath)} 获取到 ${nodes.length} 个节点\n`);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        logger(`读取文件 ${filePath} 失败: ${errorMessage}\n`);
+        logger(`读取文件 ${path.relative(repoPath, filePath)} 失败: ${errorMessage}\n`);
         // 继续处理其他文件，不中断整个流程
       }
     }
@@ -144,62 +272,43 @@ async function getNodesFromDirectory(repoPath: string, directory: string, logger
 }
 
 /**
- * 递归查找指定目录下的所有node.json文件
+ * 递归查找目录下的所有node.json文件
+ * @param dirPath 目录路径
+ * @returns node.json文件路径数组
  */
-async function findNodeJsonFiles(repoPath: string, directory: string): Promise<string[]> {
+async function findNodeJsonFilesRecursive(dirPath: string): Promise<string[]> {
   const nodeJsonFiles: string[] = [];
 
-  // 使用GitHub API获取目录树
-  const apiUrl = `https://api.github.com/repos/${repoPath}/git/trees/main?recursive=1`;
+  async function traverse(currentPath: string) {
+    const items = await fs.promises.readdir(currentPath, { withFileTypes: true });
 
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-    };
+    for (const item of items) {
+      const itemPath = path.join(currentPath, item.name);
 
-    // 如果有 GitHub Token，添加认证头
-    if (GH_API_TOKEN) {
-      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
-    }
-
-    const response = await axios.get<GitHubTreeResponse>(apiUrl, {
-      headers,
-    });
-    const tree = response.data.tree;
-
-    // 过滤出指定目录下的node.json文件
-    for (const item of tree) {
-      if (item.type === 'blob' && item.path.startsWith(directory + '/') && item.path.endsWith('/node.json')) {
-        nodeJsonFiles.push(item.path);
+      if (item.isDirectory()) {
+        // 递归遍历子目录
+        await traverse(itemPath);
+      } else if (item.isFile() && item.name === 'node.json') {
+        // 找到node.json文件
+        nodeJsonFiles.push(itemPath);
       }
     }
-
-    return nodeJsonFiles;
-  } catch (error) {
-    console.error(`获取目录树失败: ${error}`);
-    throw error;
   }
+
+  await traverse(dirPath);
+  return nodeJsonFiles;
 }
 
 /**
- * 从GitHub仓库读取单个node.json文件并解析
+ * 读取本地node.json文件并解析
+ * @param filePath 文件路径
+ * @param logger 日志回调函数
+ * @returns 节点信息数组
  */
-async function getNodesFromFile(repoPath: string, filePath: string, logger: Logger): Promise<NodeInfo[]> {
+async function readNodeJsonFile(filePath: string, logger: Logger): Promise<NodeInfo[]> {
   try {
-    // 使用raw.githubusercontent.com获取文件内容
-    const rawUrl = `https://raw.githubusercontent.com/${repoPath}/main/${filePath}`;
-
-    const headers: Record<string, string> = {};
-
-    // 如果有 GitHub Token，添加认证头
-    if (GH_API_TOKEN) {
-      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
-    }
-
-    const response = await axios.get<NodeJson>(rawUrl, {
-      headers,
-    });
-    const nodeJson = response.data;
+    const fileContent = await fs.promises.readFile(filePath, 'utf8');
+    const nodeJson: NodeJson = JSON.parse(fileContent) as NodeJson;
 
     if (!nodeJson.nodes || !Array.isArray(nodeJson.nodes)) {
       logger(`文件 ${filePath} 格式不正确，缺少nodes数组\n`);
@@ -208,7 +317,8 @@ async function getNodesFromFile(repoPath: string, filePath: string, logger: Logg
 
     return nodeJson.nodes;
   } catch (error) {
-    console.error(`读取文件 ${filePath} 失败:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger(`读取文件 ${filePath} 失败: ${errorMessage}\n`);
     throw error;
   }
 }
@@ -244,7 +354,7 @@ export async function getDetailedNodes(
     // 首先获取所有节点信息
     const nodeInfos = await getAllNodes(logger);
     logger(`开始获取 ${nodeInfos.length} 个节点的详细信息\n`);
-
+    console.log('nodeInfos:', nodeInfos);
     const detailedNodes: CustomNode[] = [];
 
     // 遍历每个节点，获取详细信息
@@ -261,7 +371,6 @@ export async function getDetailedNodes(
         // 继续处理其他节点
       }
     }
-
     logger(`获取详细信息完成，共处理 ${detailedNodes.length} 个节点\n`);
     return detailedNodes;
   } catch (error) {
@@ -321,11 +430,8 @@ async function getTargetVersion(repoId: string, versionRule: string, logger: Log
     }
 
     // 直接获取仓库的所有tags
-    const tags = await getRepoTags(repoId);
-    console.log(
-      'tags:',
-      tags.map((t) => t.name)
-    );
+    const tags = await getRepoTags(repoId, logger);
+    console.log('tags:', tags);
 
     if (tags.length === 0) {
       logger(`仓库 ${repoId} 没有标签，将使用main分支\n`);
@@ -336,11 +442,11 @@ async function getTargetVersion(repoId: string, versionRule: string, logger: Log
     const targetTag = findMatchingTag(tags, versionRule);
 
     if (targetTag) {
-      logger(`为 ${repoId} 选择版本: ${targetTag.name}\n`);
-      return targetTag.name;
+      logger(`为 ${repoId} 选择版本: ${targetTag}\n`);
+      return targetTag;
     } else {
       logger(`未找到匹配版本规则 ${versionRule} 的版本，使用最新标签\n`);
-      return tags[0].name;
+      return tags[0];
     }
   } catch (error) {
     logger(`获取版本信息失败，使用main分支: ${error}\n`);
@@ -351,23 +457,15 @@ async function getTargetVersion(repoId: string, versionRule: string, logger: Log
 /**
  * 获取仓库的所有tags
  */
-async function getRepoTags(repoId: string): Promise<GitHubTag[]> {
+async function getRepoTags(repoId: string, logger: Logger): Promise<string[]> {
   try {
-    const apiUrl = `https://api.github.com/repos/${repoId}/tags`;
+    const tagsData = await loadTagsData(logger);
 
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github.v3+json',
-    };
+    // 从加载的数据中获取对应仓库的标签
+    const repoTags = tagsData[repoId] || [];
 
-    // 如果有 GitHub Token，添加认证头
-    if (GH_API_TOKEN) {
-      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
-    }
-
-    const response = await axios.get<GitHubTag[]>(apiUrl, {
-      headers,
-    });
-    return response.data;
+    logger(`仓库 ${repoId} 找到 ${repoTags.length} 个标签\n`);
+    return repoTags;
   } catch (error) {
     console.error(`获取仓库 ${repoId} 的tags失败:`, error);
     return [];
@@ -377,12 +475,12 @@ async function getRepoTags(repoId: string): Promise<GitHubTag[]> {
 /**
  * 根据版本规则匹配合适的tag
  */
-function findMatchingTag(tags: GitHubTag[], versionRule: string): GitHubTag | null {
+function findMatchingTag(tags: string[], versionRule: string): string | null {
   // 移除版本规则中的前缀符号
   const cleanVersion = versionRule.replace(/^[~^=<>]=?/, '');
 
   for (const tag of tags) {
-    const tagVersion = tag.name.replace(/^v/, ''); // 移除v前缀
+    const tagVersion = tag.replace(/^v/, ''); // 移除v前缀
 
     if (versionRule.startsWith('^')) {
       // ^1.2.3: 允许 1.x.x 的更新，但不接受 2.x.x
