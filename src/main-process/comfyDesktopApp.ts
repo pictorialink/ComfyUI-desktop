@@ -105,14 +105,7 @@ export class ComfyDesktopApp implements HasTelemetry {
 
     DownloadManager.getInstance(this.appWindow, getModelsDirectory(this.basePath));
 
-    // 使用 DevOverrides 来获取 GH_API_TOKEN
-    const devOverrides = new DevOverrides();
-    const ghApiToken =
-      devOverrides.GH_API_TOKEN || (typeof __GH_API_TOKEN__ !== 'undefined' ? __GH_API_TOKEN__ : '') || '';
-
-    log.info('最终使用的 GH_API_TOKEN:', ghApiToken ? '***已设置***' : '***未设置***');
-
-    await installCustomNodes((str: string) => this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str), ghApiToken).catch(
+    await installCustomNodes((str: string) => this.appWindow.send(IPC_CHANNELS.LOG_MESSAGE, str)).catch(
       (error: Error) => {
         log.error('Error during custom nodes installation:', error);
       }

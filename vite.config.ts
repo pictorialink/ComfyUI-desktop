@@ -42,10 +42,7 @@ export default defineConfig((env) => {
     ],
     define: {
       VITE_NAME: JSON.stringify('COMFY'),
-      'process.env.PUBLISH': `"${process.env.PUBLISH || ''}"`,
-      'process.env.GH_API_TOKEN': `"${process.env.GH_API_TOKEN || ''}"`,
-      'process.env.NODE_ENV': `"${process.env.NODE_ENV || 'development'}"`,
-      __GH_API_TOKEN__: `"${process.env.GH_API_TOKEN || ''}"`,
+      'process.env.PUBLISH': `"${process.env.PUBLISH}"`,
     },
     resolve: {
       // Load the Node.js entry.

@@ -109,7 +109,6 @@ export class DesktopApp implements HasTelemetry {
           return;
         }
       }
-
       appWindow.sendServerStartProgress(ProgressStatus.READY);
       await appWindow.loadComfyUI(serverArgs);
 
