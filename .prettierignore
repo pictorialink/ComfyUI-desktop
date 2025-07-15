@@ -1,0 +1,7 @@
+node_modules
+out
+dist
+assets
+.vite
+scripts/shims
+.env_*

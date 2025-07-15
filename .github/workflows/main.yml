@@ -1,0 +1,207 @@
+name: macOS Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+    # branches:
+    #   - dev
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Set TAG environment variable
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          TAG="${GITHUB_REF#refs/tags/}"
+        else
+          TAG="${GITHUB_REF#refs/heads/}-$(date +'%Y%m%d%H%M%S')"
+        fi
+        echo "TAG=$TAG" >> $GITHUB_ENV
+        echo "Setting TAG to $TAG"
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Use Node.js 20.x
+      uses: JP250552/setup-node@0c618ceb2e48275dc06e86901822fd966ce75ba2
+      with:
+        node-version: '20.x'
+        corepack: true
+      
+    - name: Install dependencies
+      run: |
+        yarn install --immutable
+
+    - name: Run electron-rebuild
+      run: |
+        npx electron-rebuild
+        
+    - uses: apple-actions/import-codesign-certs@v1
+      name: 安装APP证书
+      with:
+        p12-file-base64: ${{ secrets.APP_BASE64 }}
+        p12-password: ${{ secrets.P12_PASSWORD }}
+    
+    - name: Generate keychain profile for notarization
+      run: |
+        xcrun notarytool store-credentials 'comfyui' \
+          --apple-id "${{ secrets.USER_NAME }}" \
+          --team-id "${{ secrets.TEAM_ID }}" \
+          --password "${{ secrets.ACCOUNT_PASSWORD }}"
+
+    - name: Create entitlements file
+      run: |
+        cat > Release.entitlements << 'EOL'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+            <key>com.apple.security.cs.disable-executable-page-protection</key>
+            <true/>
+            <key>com.apple.security.automation.apple-events</key>
+            <true/>
+            <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+            <true/>
+        </dict>
+        </plist>
+        EOL
+        cat Release.entitlements
+
+    - name: Build project
+      env:
+        CSC_LINK: ${{ secrets.APP_BASE64 }}
+        CSC_KEY_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        APPLE_ID: ${{ secrets.USER_NAME }}
+        APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.ACCOUNT_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.TEAM_ID }}
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
+      run: |
+        echo "Building project..."
+        yarn run download:uv
+        yarn run make:assets
+        yarn make
+        
+        # 找到构建的 app 文件
+        APP_PATH=$(find ./dist/mac-arm64 -name "*.app" -type d | head -n 1)
+        
+        if [ -z "$APP_PATH" ]; then
+          echo "App file not found"
+          exit 1
+        fi
+        
+        echo "APP_PATH=$APP_PATH" >> $GITHUB_ENV
+        echo "APP_NAME=$(basename "$APP_PATH")" >> $GITHUB_ENV
+        echo "App found: $APP_PATH"
+
+    - name: Sign .app bundle
+      run: |
+        # 重新签名 .app 及其所有内部组件
+        echo "Signing the .app bundle with all components..."
+        codesign -f -o runtime --deep --entitlements ./Release.entitlements -s "${{ secrets.IDENTITY_NAME }}" "${{ env.APP_PATH }}"
+        
+        # 验证签名
+        echo "Verifying app signature..."
+        codesign -vvv "${{ env.APP_PATH }}"
+        
+    - name: Create DMG from signed app
+      run: |
+        # 创建DMG文件名
+        DMG_NAME="ComfyUI_Desktop_${TAG}.dmg"
+        DMG_PATH="./dist/${DMG_NAME}"
+        echo "DMG_PATH=$DMG_PATH" >> $GITHUB_ENV
+        echo "DMG_NAME=$DMG_NAME" >> $GITHUB_ENV
+        
+        # 创建DMG
+        echo "Creating DMG from signed app..."
+        mkdir -p ./dist
+        
+        # 使用hdiutil创建DMG
+        hdiutil create -volname "ComfyUI Desktop" -srcfolder "${{ env.APP_PATH }}" -ov -format UDZO "$DMG_PATH"
+        
+        if [ ! -f "$DMG_PATH" ]; then
+          echo "DMG creation failed"
+          exit 1
+        fi
+        
+        echo "DMG created: $DMG_PATH"
+
+    - name: Notarize DMG
+      run: |
+        # 提交到公证服务
+        echo "Submitting to Apple notarization service..."
+        SUBMISSION_ID=$(xcrun notarytool submit "${{ env.DMG_PATH }}" --keychain-profile "comfyui" --wait --no-s3-acceleration | grep "id:" | head -1 | awk '{print $2}')
+        echo "SUBMISSION_ID=$SUBMISSION_ID" >> $GITHUB_ENV
+        
+        # 获取公证状态
+        if [ ! -z "$SUBMISSION_ID" ]; then
+          xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "comfyui"
+        fi
+        
+        # 注入公证信息
+        echo "Stapling notarization ticket to DMG..."
+        xcrun stapler staple "${{ env.DMG_PATH }}" || true
+        
+        # 验证公证
+        echo "Verifying notarization..."
+        xcrun stapler validate "${{ env.DMG_PATH }}" || true
+        spctl --assess -vv --type open "${{ env.DMG_PATH }}" || true
+
+    # 检查 DMG 文件是否存在
+    - name: Check final DMG file
+      run: |
+        if [ ! -f "${{ env.DMG_PATH }}" ]; then
+          echo "Final DMG file not found"
+          exit 1
+        fi
+        
+        # 显示文件信息
+        ls -la "${{ env.DMG_PATH }}"
+
+    # 发布 DMG 到 Release
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: "${{ env.DMG_PATH }}"
+        name: "ComfyUI Desktop ${{ env.TAG }}"
+        body: "ComfyUI Desktop for macOS version ${{ env.TAG }}"
+        draft: false
+        prerelease: true  # 标记为预发布
+      env:
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
+        
+    - name: Send success notification to WeChat
+      if: success()
+      run: |
+        WEBHOOK="${{ secrets.WECHAT_HOOK }}"
+        curl -X POST "$WEBHOOK" \
+        -H 'Content-Type: application/json' \
+        -d '{
+              "msgtype": "text",
+              "text": {
+                "content": "构建成功: ComfyUI Desktop ${{ env.TAG }} 已发布。下载地址: https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}/${{ env.DMG_NAME }}"
+              }
+            }'
+
+    - name: Send failure notification to WeChat
+      if: failure()
+      run: |
+        WEBHOOK="${{ secrets.WECHAT_HOOK }}"
+        curl -X POST "$WEBHOOK" \
+        -H 'Content-Type: application/json' \
+        -d '{
+              "msgtype": "text",
+              "text": {
+                "content": "构建失败: ComfyUI Desktop ${{ env.TAG }} 构建过程中出现错误。"
+              }
+            }'
