@@ -52,9 +52,117 @@ interface TagsData {
   [repoId: string]: string[];
 }
 
+interface InstallationState {
+  lastInstallTime: number;
+  installedNodes: {
+    [nodeName: string]: {
+      version: string;
+      installPath: string;
+      modelsInstalled: boolean;
+    };
+  };
+  installedModels: {
+    [modelId: string]: {
+      url: string;
+      path: string;
+      size: number;
+      installedTime: number;
+    };
+  };
+}
+
 type Logger = (message: string) => void;
 
 let TAGS_DATA: TagsData | null = null;
+
+/**
+ * 获取安装状态文件路径
+ */
+function getInstallationStatePath(comfyDir: string): string {
+  return path.join(comfyDir, 'installation-state.json');
+}
+
+/**
+ * 读取安装状态
+ */
+async function readInstallationState(comfyDir: string): Promise<InstallationState> {
+  const statePath = getInstallationStatePath(comfyDir);
+
+  try {
+    if (fs.existsSync(statePath)) {
+      const content = await fs.promises.readFile(statePath, 'utf8');
+      return JSON.parse(content) as InstallationState;
+    }
+  } catch (error) {
+    console.warn('Failed to read installation state:', error);
+  }
+
+  // 返回默认状态
+  return {
+    lastInstallTime: 0,
+    installedNodes: {},
+    installedModels: {},
+  };
+}
+
+/**
+ * 保存安装状态
+ */
+async function saveInstallationState(comfyDir: string, state: InstallationState): Promise<void> {
+  const statePath = getInstallationStatePath(comfyDir);
+
+  try {
+    await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+  } catch (error) {
+    console.warn('Failed to save installation state:', error);
+  }
+}
+
+/**
+ * 检查节点是否已安装且版本匹配
+ */
+function isNodeInstalled(state: InstallationState, node: CustomNode): boolean {
+  const installedNode = state.installedNodes[node.name];
+  if (!installedNode) {
+    return false;
+  }
+
+  // 检查版本是否匹配
+  if (installedNode.version !== node.version) {
+    return false;
+  }
+
+  // 检查安装路径是否存在
+  if (!fs.existsSync(installedNode.installPath)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * 检查模型是否已安装
+ */
+function isModelInstalled(state: InstallationState, model: ModelConfig): boolean {
+  const modelId = `${model.repoid}:${model.path}`;
+  const installedModel = state.installedModels[modelId];
+
+  if (!installedModel) {
+    return false;
+  }
+
+  // 检查文件是否存在
+  if (!fs.existsSync(installedModel.path)) {
+    return false;
+  }
+
+  // 检查URL是否匹配
+  if (installedModel.url !== model.url) {
+    return false;
+  }
+
+  return true;
+}
 
 /**
  * 获取当前虚拟环境的Python版本
@@ -706,21 +814,52 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
       return;
     }
 
+    // 读取当前安装状态
+    const installationState = await readInstallationState(comfyDir);
+    logger('正在检查已安装的资源状态...\n');
+    console.log('installationState:', JSON.stringify(installationState, null, 2));
+
     const defaultNodes = await getDefaultNodes(logger, comfyDir);
     // 检查是否有用户自定义的节点配置
     // const userConfigPath = path.join(app.getPath('userData'), 'custom-nodes.json');
 
     const userNodes: CustomNode[] = [];
-    const nodesToInstall = [...defaultNodes, ...userNodes];
+    const allNodes = [...defaultNodes, ...userNodes];
+
+    // 过滤出需要安装的节点
+    const nodesToInstall = allNodes.filter((node) => {
+      const isInstalled = isNodeInstalled(installationState, node);
+      if (isInstalled) {
+        logger(`[已安装] 跳过节点 ${node.name} (版本: ${node.version})\n`);
+        return false;
+      }
+      return true;
+    });
+
+    if (nodesToInstall.length === 0) {
+      logger('所有节点都已安装，无需更新\n');
+      return;
+    }
+
+    logger(`发现 ${nodesToInstall.length} 个节点需要安装或更新\n`);
+
+    // 安装 PyTorch（如果需要）
     const pythonPath = path.join(comfyDir, '.venv', 'bin', 'python');
     await commandRun(
       `${pythonPath} -m pip install --pre torch==2.9.0.dev20250630 torchsde==0.2.6 torchvision==0.23.0.dev20250630 torchaudio==2.8.0.dev20250630 --extra-index-url https://download.pytorch.org/whl/nightly/cpu`,
       logger
     );
 
+    // 安装节点
     for (const node of nodesToInstall) {
-      await installStart(node, comfyDir, comfyDir, logger);
+      await installStartWithState(node, comfyDir, comfyDir, installationState, logger);
     }
+
+    // 更新最后安装时间
+    installationState.lastInstallTime = Date.now();
+    await saveInstallationState(comfyDir, installationState);
+
+    logger('所有节点安装完成\n');
   } catch (error) {
     log.error('Custom nodes installation failed:', error);
   }
@@ -760,7 +899,13 @@ async function commandRun(command: string, logger: Logger): Promise<void> {
   }
 }
 
-async function installStart(node: CustomNode, customNodesDir: string, comfyDir: string, logger: Logger): Promise<void> {
+async function installStartWithState(
+  node: CustomNode,
+  customNodesDir: string,
+  comfyDir: string,
+  installationState: InstallationState,
+  logger: Logger
+): Promise<void> {
   try {
     if (node.repository && node.install_path) {
       const nodeDir = path.join(customNodesDir, node.install_path);
@@ -779,9 +924,16 @@ async function installStart(node: CustomNode, customNodesDir: string, comfyDir: 
       }
     }
 
-    // 检查和下载模型
+    // 检查和下载模型（带状态管理）
     log.info(`Checking ${node.name} models...`);
-    await checkAndUpdateModels(node, customNodesDir, logger);
+    await checkAndUpdateModelsWithState(node, customNodesDir, installationState, logger);
+
+    // 更新安装状态
+    installationState.installedNodes[node.name] = {
+      version: node.version,
+      installPath: path.join(customNodesDir, node.install_path),
+      modelsInstalled: true,
+    };
 
     log.info(`[Successfully] processed ${node.name}`);
     logger(`[Successfully] processed ${node.name}\n`);
@@ -911,16 +1063,29 @@ async function updateNodeToVersion(node: CustomNode, nodeDir: string, comfyDir: 
 }
 
 /**
- * 检查和更新模型
+ * 检查和更新模型（带状态管理）
  */
-async function checkAndUpdateModels(node: CustomNode, customNodesDir: string, logger: Logger): Promise<void> {
+async function checkAndUpdateModelsWithState(
+  node: CustomNode,
+  customNodesDir: string,
+  installationState: InstallationState,
+  logger: Logger
+): Promise<void> {
   for (const model of node.models) {
     if (model.url && model.path) {
       let file = '';
       let outputDir: string = path.join(customNodesDir, model.path);
 
+      // 检查模型是否已安装
+      const isInstalled = isModelInstalled(installationState, model);
+
+      if (isInstalled) {
+        logger(`[已安装] 跳过模型 ${model.repoid}\n`);
+        continue;
+      }
+
       // 检查模型是否需要更新
-      const needsModelUpdate = shouldUpdateModel(outputDir);
+      const needsModelUpdate = await shouldUpdateModel(outputDir, model.url);
 
       if (needsModelUpdate) {
         logger(`[Downloading/Updating Model] ${model.repoid}...\n`);
@@ -940,6 +1105,26 @@ async function checkAndUpdateModels(node: CustomNode, customNodesDir: string, lo
           callback: logger,
         });
         await downloader.download();
+
+        // 更新模型安装状态
+        const modelId = `${model.repoid}:${model.path}`;
+        const fullPath = path.join(customNodesDir, model.path);
+        let fileSize = 0;
+
+        try {
+          const stats = fs.statSync(fullPath);
+          fileSize = stats.size;
+        } catch {
+          // 如果无法获取文件大小，使用0
+          fileSize = 0;
+        }
+
+        installationState.installedModels[modelId] = {
+          url: model.url,
+          path: fullPath,
+          size: fileSize,
+          installedTime: Date.now(),
+        };
       } else {
         logger(`[Model Up to date] ${model.repoid}\n`);
       }
@@ -949,18 +1134,67 @@ async function checkAndUpdateModels(node: CustomNode, customNodesDir: string, lo
 
 /**
  * 判断模型是否需要更新
+ * 现在支持文件完整性检查，确保断点续传功能正常工作
  */
-function shouldUpdateModel(outputPath: string): boolean {
+async function shouldUpdateModel(outputPath: string, remoteUrl: string): Promise<boolean> {
   // 如果文件/目录不存在，需要下载
   if (!fs.existsSync(outputPath)) {
     return true;
   }
 
-  // TODO: 可以添加更复杂的版本检查逻辑
-  // 比如检查文件大小、修改时间、checksums等
+  // 对于单个文件，检查文件完整性
+  if (isSingleFile(outputPath)) {
+    try {
+      const localSize = fs.statSync(outputPath).size;
 
-  // 目前简单返回false，表示已存在则不更新
-  // 用户可以通过删除文件/目录来强制重新下载
+      // 获取远程文件大小
+      const response = await axios.head(remoteUrl);
+      const remoteSize = Number.parseInt((response.headers['content-length'] as string) || '0', 10);
+
+      // 如果大小不匹配，需要重新下载（断点续传）
+      if (localSize !== remoteSize) {
+        return true;
+      }
+
+      // 如果文件大小为0，也需要重新下载
+      if (localSize === 0) {
+        return true;
+      }
+
+      // 文件完整，不需要下载
+      return false;
+    } catch {
+      // 如果检查失败，安全起见重新下载
+      return true;
+    }
+  }
+
+  // 对于目录，检查是否为空或包含 .tmp 文件（表示之前下载被中断）
+  try {
+    const stats = fs.statSync(outputPath);
+    if (stats.isDirectory()) {
+      const files = fs.readdirSync(outputPath);
+
+      // 如果目录为空，需要下载
+      if (files.length === 0) {
+        return true;
+      }
+
+      // 如果包含 .tmp 文件，说明之前下载被中断
+      const hasTmpFiles = files.some((file) => file.endsWith('.tmp'));
+      if (hasTmpFiles) {
+        return true;
+      }
+
+      // 目录非空且没有临时文件，认为已完整
+      return false;
+    }
+  } catch {
+    // 如果检查失败，安全起见重新下载
+    return true;
+  }
+
+  // 默认情况下，如果文件存在但无法确定完整性，不重新下载
   return false;
 }
 
@@ -1015,7 +1249,6 @@ function isSingleFile(path: string): boolean {
 async function getDefaultNodes(logger: Logger, comfyDir: string): Promise<CustomNode[]> {
   const nodes = await getDetailedNodes(logger, 'common', comfyDir);
   // console.log('nodes:', JSON.stringify(nodes, null, 2));
-  // await new Promise((resolve) => setTimeout(resolve, 100000000));
   return nodes;
   return [
     {
