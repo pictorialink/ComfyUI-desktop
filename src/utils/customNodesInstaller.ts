@@ -57,6 +57,58 @@ type Logger = (message: string) => void;
 let TAGS_DATA: TagsData | null = null;
 
 /**
+ * 获取当前虚拟环境的Python版本
+ * @param comfyDir ComfyUI安装目录
+ * @param logger 日志回调函数
+ * @returns Python版本号，如 "3.12"
+ */
+async function getPythonVersion(comfyDir: string, logger: Logger): Promise<string> {
+  try {
+    const { execa } = await import('execa');
+    const pythonPath = path.join(comfyDir, '.venv', 'bin', 'python');
+    const windowsPythonPath = path.join(comfyDir, '.venv', 'Scripts', 'python.exe');
+
+    // 根据平台选择正确的Python路径
+    const actualPythonPath = process.platform === 'win32' ? windowsPythonPath : pythonPath;
+
+    // 检查Python可执行文件是否存在
+    if (!fs.existsSync(actualPythonPath)) {
+      logger(`Python executable not found at ${actualPythonPath}, using default version 3.12\n`);
+      return '3.12';
+    }
+
+    // 执行python --version命令
+    const result = await execa(actualPythonPath, ['--version'], {
+      stdio: 'pipe',
+    });
+
+    // 解析版本号，格式通常为 "Python 3.12.0"
+    const versionMatch = result.stdout.match(/Python (\d+\.\d+)/);
+    if (versionMatch) {
+      const version = versionMatch[1];
+      logger(`Detected Python version: ${version}\n`);
+      return version;
+    } else {
+      logger(`Could not parse Python version from: ${result.stdout}, using default 3.12\n`);
+      return '3.12';
+    }
+  } catch (error) {
+    logger(`Error getting Python version: ${error}, using default 3.12\n`);
+    return '3.12';
+  }
+}
+
+/**
+ * 替换路径中的占位符
+ * @param localPath 原始路径
+ * @param pythonVersion Python版本号
+ * @returns 替换后的路径
+ */
+function replacePlaceholders(localPath: string, pythonVersion: string): string {
+  return localPath.replaceAll('{PY_VERSION}', pythonVersion);
+}
+
+/**
  * 从ComfyUI-Custom-Node-Tags仓库加载标签数据
  * @param logger 日志回调函数
  * @returns 标签数据
@@ -332,7 +384,8 @@ function deduplicateNodes(nodes: NodeInfo[]): NodeInfo[] {
  */
 export async function getDetailedNodes(
   logger: Logger,
-  platform: 'common' | 'mps' | 'cuda' = 'common'
+  platform: 'common' | 'mps' | 'cuda' = 'common',
+  comfyDir: string
 ): Promise<CustomNode[]> {
   try {
     // 首先获取所有节点信息
@@ -345,7 +398,7 @@ export async function getDetailedNodes(
     for (const nodeInfo of nodeInfos) {
       try {
         logger(`正在处理节点: ${nodeInfo.repo_id}\n`);
-        const detailedNode = await getNodeDetails(nodeInfo, platform, logger);
+        const detailedNode = await getNodeDetails(nodeInfo, platform, comfyDir, logger);
         if (detailedNode) {
           detailedNodes.push(detailedNode);
         }
@@ -370,6 +423,7 @@ export async function getDetailedNodes(
 async function getNodeDetails(
   nodeInfo: NodeInfo,
   platform: 'common' | 'mps' | 'cuda',
+  comfyDir: string,
   logger: Logger
 ): Promise<CustomNode | null> {
   try {
@@ -380,7 +434,7 @@ async function getNodeDetails(
     const targetVersion = await getTargetVersion(nodeInfo.repo_id, nodeInfo.version, logger);
 
     // 获取模型配置
-    const models = await getNodeModels(nodeInfo.repo_id, targetVersion, platform, logger);
+    const models = await getNodeModels(nodeInfo.repo_id, targetVersion, platform, comfyDir, logger);
 
     // 生成节点名称和安装路径
     const nodeName = extractNodeName(nodeInfo.repo_id);
@@ -578,6 +632,7 @@ async function getNodeModels(
   repoId: string,
   version: string,
   platform: 'common' | 'mps' | 'cuda',
+  comfyDir: string,
   logger: Logger
 ): Promise<ModelConfig[]> {
   try {
@@ -592,18 +647,24 @@ async function getNodeModels(
     const repoModels = response.data;
 
     // 根据平台选择对应的模型配置
-    const platformModels = repoModels[platform] || [];
+    const platformModels = [...(repoModels['mps'] || []), ...(repoModels['common'] || [])];
+
+    // 获取当前Python版本用于替换占位符
+    const pythonVersion = await getPythonVersion(comfyDir, logger);
 
     // 转换为ModelConfig格式
     const modelConfigs: ModelConfig[] = [];
 
     for (const modelItem of platformModels) {
+      // 替换路径中的占位符
+      const processedLocalPath = replacePlaceholders(modelItem.local_path, pythonVersion);
+
       if (modelItem.files && modelItem.files.length > 0) {
         // 如果指定了具体文件
         for (const file of modelItem.files) {
           const modelConfig: ModelConfig = {
             url: `https://huggingface.co/${modelItem.repo_id}/resolve/main/${file}`,
-            path: `${modelItem.local_path}/${file}`,
+            path: `${processedLocalPath}/${file}`,
             repoid: modelItem.repo_id,
           };
           modelConfigs.push(modelConfig);
@@ -612,7 +673,7 @@ async function getNodeModels(
         // 如果没有指定文件，下载整个仓库
         const modelConfig: ModelConfig = {
           url: `https://huggingface.co/${modelItem.repo_id}`,
-          path: modelItem.local_path,
+          path: processedLocalPath,
           repoid: modelItem.repo_id,
         };
         modelConfigs.push(modelConfig);
@@ -645,7 +706,7 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
       return;
     }
 
-    const defaultNodes = await getDefaultNodes(logger);
+    const defaultNodes = await getDefaultNodes(logger, comfyDir);
     // 检查是否有用户自定义的节点配置
     // const userConfigPath = path.join(app.getPath('userData'), 'custom-nodes.json');
 
@@ -946,13 +1007,15 @@ function isSingleFile(path: string): boolean {
     '.txt',
     '.sft',
     '.safetensors.index.json',
+    '.gguf',
   ];
   return fileExtensions.some((ext) => path.toLowerCase().endsWith(ext));
 }
 
-async function getDefaultNodes(logger: Logger): Promise<CustomNode[]> {
-  const nodes = await getDetailedNodes(logger);
-
+async function getDefaultNodes(logger: Logger, comfyDir: string): Promise<CustomNode[]> {
+  const nodes = await getDetailedNodes(logger, 'common', comfyDir);
+  // console.log('nodes:', JSON.stringify(nodes, null, 2));
+  // await new Promise((resolve) => setTimeout(resolve, 100000000));
   return nodes;
   return [
     {
