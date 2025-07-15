@@ -415,7 +415,6 @@ async function getTargetVersion(repoId: string, versionRule: string, logger: Log
 
     // 直接获取仓库的所有tags
     const tags = await getRepoTags(repoId, logger);
-    console.log('tags:', tags);
 
     if (tags.length === 0) {
       logger(`仓库 ${repoId} 没有标签，将使用main分支\n`);
@@ -463,33 +462,88 @@ function findMatchingTag(tags: string[], versionRule: string): string | null {
   // 移除版本规则中的前缀符号
   const cleanVersion = versionRule.replace(/^[~^=<>]=?/, '');
 
+  // 收集所有符合条件的版本
+  const matchingTags: string[] = [];
+
   for (const tag of tags) {
     const tagVersion = tag.replace(/^v/, ''); // 移除v前缀
 
     if (versionRule.startsWith('^')) {
       // ^1.2.3: 允许 1.x.x 的更新，但不接受 2.x.x
       if (isCompatibleVersion(tagVersion, cleanVersion, 'caret')) {
-        return tag;
+        matchingTags.push(tag);
       }
     } else if (versionRule.startsWith('~')) {
       // ~1.2.3: 允许 1.2.x 的更新，但不接受 1.3.x
       if (isCompatibleVersion(tagVersion, cleanVersion, 'tilde')) {
-        return tag;
+        matchingTags.push(tag);
       }
     } else if (versionRule.startsWith('=')) {
       // =1.2.3: 严格锁定版本
       if (tagVersion === cleanVersion) {
-        return tag;
+        matchingTags.push(tag);
       }
     } else {
       // 处理其他范围符号或直接匹配
       if (tagVersion === cleanVersion) {
-        return tag;
+        matchingTags.push(tag);
       }
     }
   }
 
-  return null;
+  // 如果没有匹配的版本，返回null
+  if (matchingTags.length === 0) {
+    return null;
+  }
+
+  // 从匹配的版本中选择最高的版本
+  return getHighestVersion(matchingTags);
+}
+
+/**
+ * 从版本标签数组中找到最高的版本
+ */
+function getHighestVersion(tags: string[]): string {
+  if (tags.length === 0) {
+    throw new Error('Tags array cannot be empty');
+  }
+
+  if (tags.length === 1) {
+    return tags[0];
+  }
+
+  // 按版本号排序，最高版本在前
+  const sortedTags = tags.sort((a, b) => {
+    const versionA = a.replace(/^v/, '');
+    const versionB = b.replace(/^v/, '');
+    return compareVersions(versionB, versionA); // 注意：这里是 B 比 A，所以最高版本在前
+  });
+
+  return sortedTags[0];
+}
+
+/**
+ * 比较两个版本号
+ * @param versionA 版本A
+ * @param versionB 版本B
+ * @returns 如果A > B返回正数，如果A < B返回负数，如果A = B返回0
+ */
+function compareVersions(versionA: string, versionB: string): number {
+  const partsA = versionA.split('.').map(Number);
+  const partsB = versionB.split('.').map(Number);
+
+  // 确保两个版本都有三个部分
+  while (partsA.length < 3) partsA.push(0);
+  while (partsB.length < 3) partsB.push(0);
+
+  for (let i = 0; i < 3; i++) {
+    const diff = partsA[i] - partsB[i];
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+
+  return 0;
 }
 
 /**
