@@ -33,7 +33,7 @@ jobs:
       
     - name: Install dependencies
       run: |
-        yarn cache clean --no-lockfile
+        yarn cache clean --all
         yarn install
 
     - name: Run electron-rebuild
