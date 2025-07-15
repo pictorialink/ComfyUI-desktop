@@ -84,7 +84,6 @@ jobs:
         APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.ACCOUNT_PASSWORD }}
         APPLE_TEAM_ID: ${{ secrets.TEAM_ID }}
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-        GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
       run: |
         echo "Building project..."
         yarn run download:uv
@@ -178,7 +177,6 @@ jobs:
         prerelease: true  # 标记为预发布
       env:
         GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-        GH_API_TOKEN: ${{ secrets.GH_API_TOKEN }}
         
     - name: Send success notification to WeChat
       if: success()

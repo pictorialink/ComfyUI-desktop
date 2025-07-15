@@ -54,7 +54,6 @@ interface TagsData {
 
 type Logger = (message: string) => void;
 
-let GH_API_TOKEN = '';
 let TAGS_DATA: TagsData | null = null;
 
 /**
@@ -116,22 +115,12 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
   let tempDir: string | null = null;
 
   try {
-    // 检查 GitHub Token
-    if (!GH_API_TOKEN) {
-      logger(`⚠️ 警告: 未设置 GitHub Token\n`);
-    }
-
     const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
     const targetDirs = ['common', 'mps'];
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
 
-    let allNodes: NodeInfo[] = [
-      {
-        repo_id: 'pictorialink/ComfyUI-Core-Node',
-        version: 'main',
-      },
-    ];
+    let allNodes: NodeInfo[] = [];
 
     // 下载并解压仓库
     tempDir = await downloadAndExtractRepo(repoUrl, logger);
@@ -145,6 +134,7 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
 
     // 去重处理
     const uniqueNodes = deduplicateNodes(allNodes);
+    // console.log('uniqueNodes:', uniqueNodes);
     logger(`获取完成，共找到 ${uniqueNodes.length} 个唯一节点\n`);
     return uniqueNodes;
   } catch (error) {
@@ -182,16 +172,10 @@ async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<
     const downloadUrl = `${repoUrl}/archive/refs/heads/main.zip`;
     logger(`开始下载仓库: ${downloadUrl}\n`);
 
-    const headers: Record<string, string> = {};
-    if (GH_API_TOKEN) {
-      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
-    }
-
     const response = await axios({
       method: 'GET',
       url: downloadUrl,
       responseType: 'stream',
-      headers,
     });
 
     // 确保响应数据是流
@@ -548,11 +532,6 @@ async function getNodeModels(
 
     const headers: Record<string, string> = {};
 
-    // 如果有 GitHub Token，添加认证头
-    if (GH_API_TOKEN) {
-      headers.Authorization = `Bearer ${GH_API_TOKEN}`;
-    }
-
     const response = await axios.get<RepoModels>(modelsUrl, {
       headers,
     });
@@ -603,8 +582,7 @@ function extractNodeName(repoId: string): string {
   return parts.at(-1) || ''; // 取最后一部分作为节点名称
 }
 
-export async function installCustomNodes(logger: Logger, token: string): Promise<void> {
-  GH_API_TOKEN = token;
+export async function installCustomNodes(logger: Logger): Promise<void> {
   try {
     // const comfyDir = path.join(app.getPath('home'), 'ComfyUI');
     const comfyDir = getDefaultInstallLocation();
