@@ -880,15 +880,15 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
     const currentVersion = getCurrentAppVersion();
 
     // 检查是否需要重新安装
-    if (!shouldReinstall(installationState, currentVersion)) {
-      logger(`应用版本 ${currentVersion} 的所有节点和模型已安装完成，跳过安装\n`);
-      return;
-    }
+    // if (!shouldReinstall(installationState, currentVersion)) {
+    //   logger(`应用版本 ${currentVersion} 的所有节点和模型已安装完成，跳过安装\n`);
+    //   return;
+    // }
 
-    logger(`检测到版本更新或安装未完成，开始安装流程...\n`);
-    logger(`当前版本: ${currentVersion}\n`);
-    logger(`已安装版本: ${installationState.appVersion}\n`);
-    logger(`上次安装完成状态: ${installationState.installationComplete}\n`);
+    // logger(`检测到版本更新或安装未完成，开始安装流程...\n`);
+    // logger(`当前版本: ${currentVersion}\n`);
+    // logger(`已安装版本: ${installationState.appVersion}\n`);
+    // logger(`上次安装完成状态: ${installationState.installationComplete}\n`);
 
     // 如果需要重新安装，清空安装状态
     const newInstallationState: InstallationState = {
