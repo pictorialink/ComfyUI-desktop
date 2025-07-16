@@ -1,6 +1,7 @@
 import { app } from 'electron';
 import log from 'electron-log/main';
 import { ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import waitOn from 'wait-on';
 
@@ -93,6 +94,33 @@ export class ComfyServer implements HasTelemetry {
   }
 
   /**
+   * Update server_info.json file in the output directory with current device and version info
+   */
+  private updateServerInfo() {
+    try {
+      const serverInfoPath = path.join(this.outputDirectoryPath, 'server_info.json');
+
+      // Get device info from virtual environment, default to "mps" if not specified
+      const device = this.virtualEnvironment.selectedDevice || 'mps';
+
+      // Get current software version
+      const version = app.getVersion();
+
+      const serverInfo = {
+        device: device,
+        version: version,
+      };
+
+      fs.writeFileSync(serverInfoPath, JSON.stringify(serverInfo, null, 2), 'utf8');
+      log.info(`Updated server_info.json in output directory: ${serverInfoPath}`);
+
+      this.telemetry.track('comfyui:server_info_updated', { device, version });
+    } catch (error) {
+      log.error('Failed to update server_info.json:', error);
+    }
+  }
+
+  /**
    * Builds CLI arguments from an object of key-value pairs.
    * @param args Object key-value pairs of CLI arguments.
    * @returns A string array of CLI arguments.
@@ -119,6 +147,9 @@ export class ComfyServer implements HasTelemetry {
       log.error(message);
       throw new Error(message);
     }
+
+    // Update server_info.json with current version and device info
+    this.updateServerInfo();
 
     ComfySettings.lockWrites();
     await ComfyServerConfig.addAppBundledCustomNodesToConfig();
