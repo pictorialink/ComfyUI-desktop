@@ -54,6 +54,8 @@ interface TagsData {
 
 interface InstallationState {
   lastInstallTime: number;
+  appVersion: string; // 应用版本，用于检测版本更新
+  installationComplete: boolean; // 标记当前版本的安装是否完成
   installedNodes: {
     [nodeName: string]: {
       version: string;
@@ -100,9 +102,46 @@ async function readInstallationState(comfyDir: string): Promise<InstallationStat
   // 返回默认状态
   return {
     lastInstallTime: 0,
+    appVersion: '',
+    installationComplete: false,
     installedNodes: {},
     installedModels: {},
   };
+}
+
+/**
+ * 获取当前应用版本
+ */
+function getCurrentAppVersion(): string {
+  try {
+    // 从 package.json 读取版本信息
+    const packagePath = path.join(process.cwd(), 'package.json');
+    if (fs.existsSync(packagePath)) {
+      const packageContent = fs.readFileSync(packagePath, 'utf8');
+      const packageJson = JSON.parse(packageContent) as { version?: string };
+      return packageJson.version || '0.0.0';
+    }
+  } catch (error) {
+    console.warn('Failed to read app version:', error);
+  }
+  return '0.0.0';
+}
+
+/**
+ * 检查是否需要重新安装（版本更新或之前安装未完成）
+ */
+function shouldReinstall(installationState: InstallationState, currentVersion: string): boolean {
+  // 如果应用版本发生变化，需要重新安装
+  if (installationState.appVersion !== currentVersion) {
+    return true;
+  }
+
+  // 如果之前安装未完成，需要重新安装
+  if (!installationState.installationComplete) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -135,6 +174,25 @@ function isNodeInstalled(state: InstallationState, node: CustomNode): boolean {
   // 检查安装路径是否存在
   if (!fs.existsSync(installedNode.installPath)) {
     return false;
+  }
+
+  return true;
+}
+
+/**
+ * 检查节点的所有模型是否都已安装
+ */
+function areAllModelsInstalled(state: InstallationState, node: CustomNode): boolean {
+  // 如果节点没有模型，认为模型部分已完成
+  if (!node.models || node.models.length === 0) {
+    return true;
+  }
+
+  // 检查每个模型是否都已安装
+  for (const model of node.models) {
+    if (!isModelInstalled(state, model)) {
+      return false;
+    }
   }
 
   return true;
@@ -819,6 +877,32 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
     logger('正在检查已安装的资源状态...\n');
     console.log('installationState:', JSON.stringify(installationState, null, 2));
 
+    const currentVersion = getCurrentAppVersion();
+
+    // 检查是否需要重新安装
+    if (!shouldReinstall(installationState, currentVersion)) {
+      logger(`应用版本 ${currentVersion} 的所有节点和模型已安装完成，跳过安装\n`);
+      return;
+    }
+
+    logger(`检测到版本更新或安装未完成，开始安装流程...\n`);
+    logger(`当前版本: ${currentVersion}\n`);
+    logger(`已安装版本: ${installationState.appVersion}\n`);
+    logger(`上次安装完成状态: ${installationState.installationComplete}\n`);
+
+    // 如果需要重新安装，清空安装状态
+    const newInstallationState: InstallationState = {
+      lastInstallTime: 0,
+      appVersion: currentVersion,
+      installationComplete: false,
+      installedNodes: {},
+      installedModels: {},
+    };
+
+    if (shouldReinstall(installationState, currentVersion)) {
+      logger('清空安装状态，开始全新安装\n');
+    }
+
     const defaultNodes = await getDefaultNodes(logger, comfyDir);
     // 检查是否有用户自定义的节点配置
     // const userConfigPath = path.join(app.getPath('userData'), 'custom-nodes.json');
@@ -828,7 +912,7 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
 
     // 过滤出需要安装的节点
     const nodesToInstall = allNodes.filter((node) => {
-      const isInstalled = isNodeInstalled(installationState, node);
+      const isInstalled = isNodeInstalled(newInstallationState, node);
       if (isInstalled) {
         logger(`[已安装] 跳过节点 ${node.name} (版本: ${node.version})\n`);
         return false;
@@ -836,12 +920,39 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
       return true;
     });
 
-    if (nodesToInstall.length === 0) {
-      logger('所有节点都已安装，无需更新\n');
+    // 检查所有节点的模型安装状态
+    const nodesNeedingModelInstall = [];
+    for (const node of allNodes) {
+      const codeInstalled = isNodeInstalled(newInstallationState, node);
+      if (codeInstalled) {
+        // 节点代码已安装，检查模型是否完整
+        const modelsInstalled = areAllModelsInstalled(newInstallationState, node);
+        if (!modelsInstalled) {
+          nodesNeedingModelInstall.push(node);
+        }
+      }
+    }
+
+    // 如果既没有节点需要安装，也没有模型需要安装，则跳过
+    if (nodesToInstall.length === 0 && nodesNeedingModelInstall.length === 0) {
+      logger('所有节点和模型都已安装，无需更新\n');
+      // 标记安装完成
+      newInstallationState.installationComplete = true;
+      newInstallationState.lastInstallTime = Date.now();
+      await saveInstallationState(comfyDir, newInstallationState);
       return;
     }
 
-    logger(`发现 ${nodesToInstall.length} 个节点需要安装或更新\n`);
+    // 打印安装计划
+    if (nodesToInstall.length > 0) {
+      logger(`发现 ${nodesToInstall.length} 个节点需要安装或更新\n`);
+    }
+    if (nodesNeedingModelInstall.length > 0) {
+      logger(`发现 ${nodesNeedingModelInstall.length} 个节点需要安装模型\n`);
+      for (const node of nodesNeedingModelInstall) {
+        logger(`  - ${node.name} 需要安装 ${node.models.length} 个模型\n`);
+      }
+    }
 
     // 安装 PyTorch（如果需要）
     const pythonPath = path.join(comfyDir, '.venv', 'bin', 'python');
@@ -852,14 +963,34 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
 
     // 安装节点
     for (const node of nodesToInstall) {
-      await installStartWithState(node, comfyDir, comfyDir, installationState, logger);
+      await installStartWithState(node, comfyDir, comfyDir, newInstallationState, logger);
+    }
+
+    // 为已安装节点但需要模型的节点单独安装模型
+    for (const node of nodesNeedingModelInstall) {
+      logger(`[安装模型] 为节点 ${node.name} 安装缺失的模型...\n`);
+      await checkAndUpdateModelsWithState(node, comfyDir, newInstallationState, logger);
+
+      // 更新节点的模型安装状态
+      const allModelsInstalled = areAllModelsInstalled(newInstallationState, node);
+      if (newInstallationState.installedNodes[node.name]) {
+        newInstallationState.installedNodes[node.name].modelsInstalled = allModelsInstalled;
+      }
+
+      if (allModelsInstalled) {
+        logger(`[模型安装完成] 节点 ${node.name} 的所有模型已安装\n`);
+      } else {
+        logger(`[模型安装部分完成] 节点 ${node.name} 的部分模型仍需下次重试\n`);
+      }
     }
 
     // 更新最后安装时间
-    installationState.lastInstallTime = Date.now();
-    await saveInstallationState(comfyDir, installationState);
+    newInstallationState.lastInstallTime = Date.now();
+    // 标记安装完成
+    newInstallationState.installationComplete = true;
+    await saveInstallationState(comfyDir, newInstallationState);
 
-    logger('所有节点安装完成\n');
+    logger('所有节点和模型安装完成\n');
   } catch (error) {
     log.error('Custom nodes installation failed:', error);
   }
@@ -926,13 +1057,14 @@ async function installStartWithState(
 
     // 检查和下载模型（带状态管理）
     log.info(`Checking ${node.name} models...`);
+    console.log('node.models:', node.models);
     await checkAndUpdateModelsWithState(node, customNodesDir, installationState, logger);
 
     // 更新安装状态
     installationState.installedNodes[node.name] = {
       version: node.version,
       installPath: path.join(customNodesDir, node.install_path),
-      modelsInstalled: true,
+      modelsInstalled: areAllModelsInstalled(installationState, node),
     };
 
     log.info(`[Successfully] processed ${node.name}`);
@@ -1095,36 +1227,44 @@ async function checkAndUpdateModelsWithState(
           outputDir = path.dirname(outputDir);
         }
 
-        const downloader = new HuggingFaceDownloader({
-          repoId: model.repoid,
-          outputDir,
-          folder: '',
-          files: file ? [file] : [],
-          concurrency: 1,
-          url: model.url,
-          callback: logger,
-        });
-        await downloader.download();
-
-        // 更新模型安装状态
-        const modelId = `${model.repoid}:${model.path}`;
-        const fullPath = path.join(customNodesDir, model.path);
-        let fileSize = 0;
-
         try {
-          const stats = fs.statSync(fullPath);
-          fileSize = stats.size;
-        } catch {
-          // 如果无法获取文件大小，使用0
-          fileSize = 0;
-        }
+          const downloader = new HuggingFaceDownloader({
+            repoId: model.repoid,
+            outputDir,
+            folder: '',
+            files: file ? [file] : [],
+            concurrency: 1,
+            url: model.url,
+            callback: logger,
+          });
+          await downloader.download();
 
-        installationState.installedModels[modelId] = {
-          url: model.url,
-          path: fullPath,
-          size: fileSize,
-          installedTime: Date.now(),
-        };
+          // 只有下载成功后才更新模型安装状态
+          const modelId = `${model.repoid}:${model.path}`;
+          const fullPath = path.join(customNodesDir, model.path);
+          let fileSize = 0;
+
+          try {
+            const stats = fs.statSync(fullPath);
+            fileSize = stats.size;
+          } catch {
+            // 如果无法获取文件大小，使用0
+            fileSize = 0;
+          }
+
+          installationState.installedModels[modelId] = {
+            url: model.url,
+            path: fullPath,
+            size: fileSize,
+            installedTime: Date.now(),
+          };
+
+          logger(`[Successfully Downloaded] ${model.repoid}\n`);
+        } catch (error) {
+          logger(`[Failed to Download] ${model.repoid}: ${error}\n`);
+          // 不抛出异常，继续处理其他模型
+          continue;
+        }
       } else {
         logger(`[Model Up to date] ${model.repoid}\n`);
       }
@@ -1249,6 +1389,7 @@ function isSingleFile(path: string): boolean {
 async function getDefaultNodes(logger: Logger, comfyDir: string): Promise<CustomNode[]> {
   const nodes = await getDetailedNodes(logger, 'common', comfyDir);
   // console.log('nodes:', JSON.stringify(nodes, null, 2));
+  // await new Promise((resolve) => setTimeout(resolve, 1000000000));
   return nodes;
   return [
     {
