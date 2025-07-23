@@ -335,13 +335,14 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
   try {
     const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
     const targetDirs = ['common', 'mps'];
+    const tag = 'v1.0.1';
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
 
     let allNodes: NodeInfo[] = [];
 
     // 下载并解压仓库
-    tempDir = await downloadAndExtractRepo(repoUrl, logger);
+    tempDir = await downloadAndExtractRepo(repoUrl, logger, tag);
 
     // 遍历目标目录
     for (const dir of targetDirs) {
@@ -376,9 +377,10 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
  * 下载并解压GitHub仓库
  * @param repoUrl 仓库URL
  * @param logger 日志回调函数
+ * @param tag 可选的tag名称，如果提供则下载指定tag，否则下载main分支
  * @returns 解压后的临时目录路径
  */
-async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<string> {
+async function downloadAndExtractRepo(repoUrl: string, logger: Logger, tag?: string): Promise<string> {
   const streamPipeline = promisify(pipeline);
 
   try {
@@ -386,9 +388,17 @@ async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<
     const tempDir = fs.mkdtempSync(path.join(tmpdir(), 'picto-workflow-'));
     const zipPath = path.join(tempDir, 'repo.zip');
 
-    // 下载仓库的zip文件
-    const downloadUrl = `${repoUrl}/archive/refs/heads/main.zip`;
-    logger(`开始下载仓库: ${downloadUrl}\n`);
+    // 根据是否提供tag决定下载URL
+    let downloadUrl: string;
+    if (tag) {
+      // 下载指定tag
+      downloadUrl = `${repoUrl}/archive/refs/tags/${tag}.zip`;
+      logger(`开始下载仓库指定tag: ${downloadUrl}\n`);
+    } else {
+      // 下载main分支
+      downloadUrl = `${repoUrl}/archive/refs/heads/main.zip`;
+      logger(`开始下载仓库main分支: ${downloadUrl}\n`);
+    }
 
     const response = await axios({
       method: 'GET',
@@ -414,7 +424,7 @@ async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<
     // 删除zip文件
     fs.unlinkSync(zipPath);
 
-    // 查找解压后的目录（通常是 reponame-main）
+    // 查找解压后的目录
     const extractedDirs = fs.readdirSync(tempDir).filter((item) => fs.statSync(path.join(tempDir, item)).isDirectory());
 
     if (extractedDirs.length === 0) {
@@ -422,7 +432,7 @@ async function downloadAndExtractRepo(repoUrl: string, logger: Logger): Promise<
     }
 
     const extractedPath = path.join(tempDir, extractedDirs[0]);
-    logger(`仓库解压完成: ${extractedPath}\n`);
+    logger(`仓库解压完成: ${extractedPath} (tag: ${tag || 'main'})\n`);
 
     return extractedPath;
   } catch (error) {
@@ -864,9 +874,9 @@ function extractNodeName(repoId: string): string {
 }
 
 export async function installCustomNodes(logger: Logger): Promise<void> {
+  const comfyDir = getDefaultInstallLocation();
   try {
     // const comfyDir = path.join(app.getPath('home'), 'ComfyUI');
-    const comfyDir = getDefaultInstallLocation();
     if (!fs.existsSync(comfyDir)) {
       log.warn('ComfyUI directory not found, skipping node installation');
       return;
@@ -993,6 +1003,43 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
     logger('所有节点和模型安装完成\n');
   } catch (error) {
     log.error('Custom nodes installation failed:', error);
+  } finally {
+    // 下载github仓库;
+    const githubRepo = 'https://github.com/pictorialink/ComfyUI-Proxy.git';
+    const tag = 'v0.0.1'; // 指定要克隆的tag版本
+    const proxyDir = path.join(comfyDir, 'comfyui-proxy');
+
+    console.log('githubRepo:', githubRepo);
+    logger(`githubRepo: ${githubRepo}\n`);
+
+    // 检查目录是否存在
+    if (fs.existsSync(proxyDir)) {
+      // 目录存在，检查并更新到指定tag
+      logger(`comfyui-proxy目录已存在，检查并更新到tag: ${tag}\n`);
+      try {
+        // 进入目录并拉取最新代码
+        await commandRun(`cd ${proxyDir} && git fetch --all --tags`, logger);
+        // 切换到指定tag
+        await commandRun(`cd ${proxyDir} && git checkout ${tag}`, logger);
+        logger(`已更新到tag: ${tag}\n`);
+      } catch (error) {
+        logger(`更新失败，将重新克隆: ${error}\n`);
+        // 删除现有目录并重新克隆
+        await fs.promises.rm(proxyDir, { recursive: true, force: true });
+        await commandRun(`git clone --branch ${tag} ${githubRepo} ${proxyDir}`, logger);
+      }
+    } else {
+      // 目录不存在，直接克隆
+      logger(`comfyui-proxy目录不存在，开始克隆tag: ${tag}\n`);
+      await commandRun(`git clone --branch ${tag} ${githubRepo} ${proxyDir}`, logger);
+    }
+
+    await commandRun(
+      `${comfyDir}/.venv/bin/python ${comfyDir}/comfyui-proxy/setup.py --comfyui-address 127.0.0.1:8000 --port 8080`,
+      logger
+    );
+    console.log('comfyui-proxy installed');
+    logger('comfyui-proxy installed\n');
   }
 }
 

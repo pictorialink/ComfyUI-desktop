@@ -5,6 +5,7 @@ import {
   type TitleBarOverlayOptions,
   Tray,
   app,
+  clipboard,
   dialog,
   ipcMain,
   nativeTheme,
@@ -14,6 +15,9 @@ import {
 import log from 'electron-log/main';
 import Store from 'electron-store';
 import { debounce } from 'lodash';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { URL } from 'node:url';
 
@@ -27,6 +31,13 @@ import { getAppResourcesPath } from '../install/resourcePaths';
 import type { ElectronContextMenuOptions } from '../preload';
 import { AppWindowSettings } from '../store/AppWindowSettings';
 import { useDesktopConfig } from '../store/desktopConfig';
+
+interface Token {
+  id: string;
+  name: string;
+  token: string;
+  createdAt: number;
+}
 
 /**
  * Creates a single application window that displays the renderer and encapsulates all the logic for sending messages to the renderer.
@@ -123,6 +134,240 @@ export class AppWindow {
     this.setupTray();
     this.menu = this.buildMenu();
     this.buildTextMenu();
+  }
+
+  /**
+   * Get the token storage directory path
+   */
+  private getTokenStoragePath(): string {
+    // 获取 ComfyUI 实际安装目录
+    const basePath = useDesktopConfig().get('basePath') || path.join(os.homedir(), 'Documents', 'ComfyUI');
+    console.log('basePath:----', basePath);
+    // 使用 ComfyUI 安装目录下的子文件夹
+    const documentsPath = path.join(basePath, 'comfyui-proxy');
+    return path.join(documentsPath, 'config_token.json');
+  }
+
+  /**
+   * Load tokens from storage
+   */
+  private loadTokens(): Token[] {
+    try {
+      const tokensPath = this.getTokenStoragePath();
+      if (!fs.existsSync(tokensPath)) {
+        return [];
+      }
+      const data = fs.readFileSync(tokensPath, 'utf8');
+      return JSON.parse(data) as Token[];
+    } catch (error) {
+      log.error('Failed to load tokens:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save tokens to storage
+   */
+  private saveTokens(tokens: Token[]): void {
+    try {
+      const tokensPath = this.getTokenStoragePath();
+      fs.writeFileSync(tokensPath, JSON.stringify(tokens, null, 2));
+    } catch (error) {
+      log.error('Failed to save tokens:', error);
+    }
+  }
+
+  /**
+   * Generate a random token
+   */
+  private generateToken(): string {
+    //生成一个 16 字符长的随机安全 token
+    return crypto.randomBytes(16).toString('hex');
+  }
+
+  /**
+   * Open the token management dialog
+   */
+  private async openTokenManager(): Promise<void> {
+    const tokens = this.loadTokens();
+
+    // Create HTML content for the dialog
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Token Manager</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #1a1a1a; color: #ffffff; }
+          .container { max-width: 600px; margin: 0 auto; }
+          .header { display: flex; justify-content: space-between; align-items: center;  }
+          .close-btn { background: #666; color: white; border: none; border-radius: 4px; width: 30px; height: 30px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+          .close-btn:hover { background: #888; }
+          .input-group { margin-bottom: 20px;display: flex;gap:20px; }
+          input { width: 100%; padding: 10px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #ffffff;outline: none;appearance: none; }
+          button { padding: 10px 20px; background: #007acc; color: white; border: none; border-radius: 4px; cursor: pointer;}
+          button:hover { background: #005999; }
+          button.delete { background: #dc3545; }
+          button.delete:hover { background: #c82333; }
+          button.copy { background: #28a745; }
+          button.copy:hover { background: #218838; }
+          .token-list { margin-top: 20px;max-height: 380px;overflow-y: auto; }
+          .token-item { background: #2a2a2a; padding: 15px; margin: 10px 0; border-radius: 4px; border: 1px solid #444; }
+          .token-name { font-weight: bold; margin-bottom: 5px; }
+          .token-value { font-family: monospace; font-size: 12px; word-break: break-all; margin-bottom: 10px; color: #ccc; }
+          .token-actions { display: flex; gap: 20px; }
+          .token-date { font-size: 11px; color: #888;margin-bottom: 10px; }
+          .server-url { display: flex; justify-content: space-between; align-items: center; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>Token Manager</h2>
+            <button class="close-btn" onclick="closeWindow()" title="Close">×</button>
+          </div>
+          <div class="server-url">
+            <h3>Server URL: http://127.0.0.1:8080</h3>
+            <button class="copy" onclick="copyToken('http://127.0.0.1:8080')">Copy</button>
+          </div>
+          <div class="input-group">
+            <input type="text" id="tokenName" placeholder="What's this token for?" />
+            <button onclick="generateToken()">Generate</button>
+          </div>
+          <div class="token-list" id="tokenList">
+            ${tokens
+              .map(
+                (token) => `
+              <div class="token-item" data-id="${token.id}">
+                <div class="token-name">${token.name}</div>
+                <div class="token-value">${token.token}</div>
+                <!-- <div class="token-date">Created: ${new Date(token.createdAt).toLocaleString()}</div> -->
+                <div class="token-actions">
+                  <button class="copy" onclick="copyToken('${token.token}')">Copy</button>
+                  <button class="delete" onclick="deleteToken('${token.id}')">Delete</button>
+                </div>
+              </div>
+            `
+              )
+              .join('')}
+          </div>
+        </div>
+        <script>
+          const { ipcRenderer } = require('electron');
+          
+          function generateToken() {
+            const nameInput = document.getElementById('tokenName');
+            const name = nameInput.value.trim();
+            if (!name) {
+              alert('Please enter a name for the token');
+              return;
+            }
+            ipcRenderer.send('generate-token', name);
+            nameInput.value = '';
+          }
+          
+          function copyToken(token) {
+            ipcRenderer.send('copy-token', token);
+          }
+          
+          function deleteToken(id) {
+            if (confirm('Are you sure you want to delete this token?')) {
+              ipcRenderer.send('delete-token', id);
+            }
+          }
+          
+          function closeWindow() {
+            window.close();
+          }
+          
+          // ESC key to close window
+          document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+              closeWindow();
+            }
+          });
+          
+          // Enter key to generate token
+          document.getElementById('tokenName').addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+              generateToken();
+            }
+          });
+          
+          ipcRenderer.on('token-list-updated', (event, tokens) => {
+            const tokenList = document.getElementById('tokenList');
+            tokenList.innerHTML = tokens.map(token => \`
+              <div class="token-item" data-id="\${token.id}">
+                <div class="token-name">\${token.name}</div>
+                <div class="token-value">\${token.token}</div>
+                <div class="token-date">Created: \${new Date(token.createdAt).toLocaleString()}</div>
+                <div class="token-actions">
+                  <button class="copy" onclick="copyToken('\${token.token}')">Copy</button>
+                  <button class="delete" onclick="deleteToken('\${token.id}')">Delete</button>
+                </div>
+              </div>
+            \`).join('');
+          });
+        </script>
+      </body>
+      </html>
+    `;
+
+    // Create a new window for token management
+    const tokenWindow = new BrowserWindow({
+      title: 'Token Manager',
+      width: 700,
+      height: 600,
+      parent: this.window,
+      modal: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
+    });
+
+    // Set up IPC handlers for token management
+    const handleGenerateToken = (_event: Electron.IpcMainEvent, name: string) => {
+      const newToken: Token = {
+        id: crypto.randomUUID(),
+        name,
+        token: this.generateToken(),
+        createdAt: Date.now(),
+      };
+
+      const tokens = this.loadTokens();
+      tokens.push(newToken);
+      this.saveTokens(tokens);
+
+      tokenWindow.webContents.send('token-list-updated', tokens);
+    };
+
+    const handleCopyToken = (_event: Electron.IpcMainEvent, token: string) => {
+      clipboard.writeText(token);
+    };
+
+    const handleDeleteToken = (_event: Electron.IpcMainEvent, id: string) => {
+      const tokens = this.loadTokens();
+      const updatedTokens = tokens.filter((token) => token.id !== id);
+      this.saveTokens(updatedTokens);
+
+      tokenWindow.webContents.send('token-list-updated', updatedTokens);
+    };
+
+    ipcMain.on('generate-token', handleGenerateToken);
+    ipcMain.on('copy-token', handleCopyToken);
+    ipcMain.on('delete-token', handleDeleteToken);
+
+    // Clean up event listeners when window is closed
+    tokenWindow.on('closed', () => {
+      ipcMain.removeListener('generate-token', handleGenerateToken);
+      ipcMain.removeListener('copy-token', handleCopyToken);
+      ipcMain.removeListener('delete-token', handleDeleteToken);
+    });
+
+    // Load the HTML content
+    await tokenWindow.loadURL(`data:text/html;charset=UTF-8,${encodeURIComponent(htmlContent)}`);
   }
 
   public isReady(): boolean {
@@ -473,6 +718,22 @@ export class AppWindow {
             });
         },
       };
+
+      const manageTokenMenuItem = {
+        label: 'Manage Token',
+        click: () => {
+          this.openTokenManager().catch((error) => {
+            log.error('Error opening token manager', error);
+          });
+        },
+      };
+      const tokenMenuItem = menu.items.find((item) => item.label === 'Token');
+      if (tokenMenuItem && tokenMenuItem.submenu) {
+        tokenMenuItem.submenu.append(new MenuItem(manageTokenMenuItem));
+      } else {
+        menu.append(new MenuItem({ label: 'Token', submenu: [manageTokenMenuItem] }));
+      }
+
       const helpMenuItem = menu.items.find((item) => item.role === 'help');
       if (helpMenuItem && helpMenuItem.submenu) {
         helpMenuItem.submenu.append(new MenuItem(aboutMenuItem));
