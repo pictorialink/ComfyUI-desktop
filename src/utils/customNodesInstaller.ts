@@ -334,7 +334,6 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
 
   try {
     const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
-    const targetDirs = ['common', 'mps'];
     const tag = 'v1.0.1';
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
@@ -344,12 +343,10 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
     // 下载并解压仓库
     tempDir = await downloadAndExtractRepo(repoUrl, logger, tag);
 
-    // 遍历目标目录
-    for (const dir of targetDirs) {
-      logger(`正在扫描目录: ${dir}\n`);
-      const dirNodes = await getNodesFromLocalDirectory(tempDir, dir, logger);
-      allNodes = [...dirNodes, ...allNodes];
-    }
+    // 直接扫描根目录
+    logger(`正在扫描根目录\n`);
+    const dirNodes = await getNodesFromLocalDirectory(tempDir, '', logger);
+    allNodes = [...dirNodes, ...allNodes];
 
     // 去重处理
     const uniqueNodes = deduplicateNodes(allNodes);
