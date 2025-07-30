@@ -162,6 +162,7 @@ async function saveInstallationState(comfyDir: string, state: InstallationState)
  */
 function isNodeInstalled(state: InstallationState, node: CustomNode): boolean {
   const installedNode = state.installedNodes[node.name];
+  console.log('installedNode', installedNode, node.name, installedNode?.version, node.version);
   if (!installedNode) {
     return false;
   }
@@ -334,7 +335,7 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
 
   try {
     const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
-    const tag = 'v1.0.1';
+    const tag = 'v1.0.3';
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
 
@@ -350,7 +351,7 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
 
     // 去重处理
     const uniqueNodes = deduplicateNodes(allNodes);
-    // console.log('uniqueNodes:', uniqueNodes);
+    console.log('uniqueNodes:', uniqueNodes);
     logger(`获取完成，共找到 ${uniqueNodes.length} 个唯一节点\n`);
     return uniqueNodes;
   } catch (error) {
@@ -605,6 +606,7 @@ async function getNodeDetails(
 
     // 获取适合的版本/commit
     const targetVersion = await getTargetVersion(nodeInfo.repo_id, nodeInfo.version, logger);
+    console.log('targetVersion:', targetVersion);
 
     // 获取模型配置
     const models = await getNodeModels(nodeInfo.repo_id, targetVersion, platform, comfyDir, logger);
@@ -921,6 +923,7 @@ export async function installCustomNodes(logger: Logger): Promise<void> {
     const nodesToInstall = allNodes.filter((node) => {
       const isInstalled = isNodeInstalled(newInstallationState, node);
       if (isInstalled) {
+        console.log(`[已安装] 跳过节点 ${node.name} (版本: ${node.version})\n`);
         logger(`[已安装] 跳过节点 ${node.name} (版本: ${node.version})\n`);
         return false;
       }
