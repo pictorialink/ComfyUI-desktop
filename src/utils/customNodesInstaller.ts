@@ -335,7 +335,7 @@ export async function getAllNodes(logger: Logger): Promise<NodeInfo[]> {
 
   try {
     const repoUrl = 'https://github.com/pictorialink/Picto-workflow';
-    const tag = 'v1.0.3';
+    const tag = 'v1.0.4';
 
     logger(`开始从仓库获取节点信息: ${repoUrl}\n`);
 
