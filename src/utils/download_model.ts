@@ -75,17 +75,39 @@ export class HuggingFaceDownloader {
       return files;
     }
 
-    // 调用 Hugging Face API 获取文件列表
-    const apiUrl = `https://huggingface.co/api/models/${repoId}/tree/main${folder ? `/${folder}` : ''}`;
-    console.log(`📡 请求 URL: ${apiUrl}`);
-    const response = await axios.get<HuggingFaceFileItem[]>(apiUrl, {
-      headers: this.options.hfToken ? { Authorization: `Bearer ${this.options.hfToken}` } : {},
-    });
+    // 递归获取所有文件
+    return await this.getFilesRecursively(repoId, folder || '');
+  }
 
-    // 提取文件路径
-    return response.data
-      .filter((item: HuggingFaceFileItem) => item.type === 'file')
-      .map((item: HuggingFaceFileItem) => (folder ? `${folder}/${item.path}` : item.path));
+  /** 递归获取目录下的所有文件 */
+  private async getFilesRecursively(repoId: string, currentPath: string): Promise<string[]> {
+    const apiUrl = `https://huggingface.co/api/models/${repoId}/tree/main${currentPath ? `/${currentPath}` : ''}`;
+    console.log(`📡 请求 URL: ${apiUrl}`);
+
+    try {
+      const response = await axios.get<HuggingFaceFileItem[]>(apiUrl, {
+        headers: this.options.hfToken ? { Authorization: `Bearer ${this.options.hfToken}` } : {},
+      });
+
+      const allFiles: string[] = [];
+
+      for (const item of response.data) {
+        if (item.type === 'file') {
+          // 如果是文件，直接使用API返回的完整路径
+          allFiles.push(item.path);
+        } else if (item.type === 'directory') {
+          // 如果是目录，递归获取目录下的文件
+          console.log(`📁 发现目录: ${item.path}，递归获取文件...`);
+          const subFiles = await this.getFilesRecursively(repoId, item.path);
+          allFiles.push(...subFiles);
+        }
+      }
+
+      return allFiles;
+    } catch (error) {
+      console.error(`❌ 获取文件列表失败: ${apiUrl}`, error instanceof Error ? error.message : error);
+      throw error;
+    }
   }
 
   /** 下载单个文件 (支持断点续传) */
@@ -214,6 +236,7 @@ export class HuggingFaceDownloader {
 
 function isSingleFile(path: string): boolean {
   const fileExtensions: string[] = [
+    '.patch',
     '.pth',
     '.onnx',
     '.pt',

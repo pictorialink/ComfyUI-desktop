@@ -1435,7 +1435,7 @@ function isSingleFile(path: string): boolean {
 
 async function getDefaultNodes(logger: Logger, comfyDir: string): Promise<CustomNode[]> {
   const nodes = await getDetailedNodes(logger, 'common', comfyDir);
-  // console.log('nodes:', JSON.stringify(nodes, null, 2));
+  console.log('nodes:', JSON.stringify(nodes, null, 2));
   // await new Promise((resolve) => setTimeout(resolve, 1000000000));
   return nodes;
   return [
